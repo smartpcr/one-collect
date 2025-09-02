@@ -728,19 +728,16 @@ impl OSDotNetEventFactory {
         &mut self,
         exporter: UniversalExporter) -> UniversalExporter {
         let fn_providers = self.providers.clone();
-        let tracefs = match TraceFS::open() {
-            Ok(tracefs) => { Some(tracefs) },
-            Err(_) => { None },
-        };
+        let tracefs = TraceFS::open();
 
         let user_events = match &tracefs {
-            Some(tracefs) => {
+            Ok(tracefs) => {
                 match tracefs.user_events_factory() {
                     Ok(user_events) => { Some(user_events) },
                     Err(_) => { None },
                 }
             },
-            None => { None },
+            Err(_) => { None },
         };
 
         let tracker_events = Arc::new(Mutex::new(UserEventTrackerSettings::default()));
@@ -751,10 +748,9 @@ impl OSDotNetEventFactory {
 
         exporter.with_settings_hook(move |mut settings| {
             let tracefs = match tracefs.as_ref() {
-                Some(tracefs) => { tracefs },
-                None => { anyhow::bail!("TraceFS is not accessible."); },
+                Ok(tracefs) => { tracefs },
+                Err(err)  => { anyhow::bail!("Tracefs is not accessible: {}", err); },
             };
-
             let user_events = fn_user_events.borrow();
             let user_events = match user_events.as_ref() {
                 Some(user_events) => { user_events },
