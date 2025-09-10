@@ -23,6 +23,9 @@ use crate::etw::{EtwSession, AncillaryData};
 use crate::helpers::dotnet::scripting::*;
 use crate::Guid;
 
+#[cfg(target_os = "windows")]
+use winreg::*;
+
 pub(crate) struct OSDotNetHelper {
     jit_symbols: bool,
 }
@@ -48,23 +51,150 @@ impl DotNetHelperWindowsExt for DotNetHelper {
 }
 
 pub(crate) struct OSDotNetEventFactory {
-    filter_args: HashMap<Guid, String>,
+    filter_args: Writable<Option<HashMap<Guid, String>>>,
 }
 
 impl OSDotNetEventFactory {
+    const ETW_REG_PUB_KEY: &'static str = "SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Winevt\\Publishers";
+
     pub fn new(_proxy: impl FnMut(String, usize) -> Option<Event> + 'static) -> Self {
         Self {
-            filter_args: HashMap::new(),
+            filter_args: Writable::new(Some(HashMap::new())),
         }
+    }
+
+    fn for_each_provider_key(
+        filter_args: &HashMap<Guid, String>,
+        mut closure: impl FnMut(&str, &str)) {
+        use std::fmt::Write;
+
+        let mut key_name = String::new();
+
+        for (guid, value) in filter_args {
+            key_name.clear();
+
+            key_name.push_str(Self::ETW_REG_PUB_KEY);
+            key_name.push_str("\\");
+
+            let _ = write!(
+                key_name,
+                "{{{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
+                guid.data1, guid.data2, guid.data3,
+                guid.data4[0], guid.data4[1], guid.data4[2], guid.data4[3],
+                guid.data4[4], guid.data4[5], guid.data4[6], guid.data4[7]);
+
+            closure(&key_name, value);
+        }
+    }
+
+    fn value_to_filter_bytes(
+        values: &str,
+        bytes: &mut Vec<u8>) {
+        for value in values.split_whitespace() {
+            if let Some((name, value)) = value.split_once('=') {
+                bytes.extend_from_slice(name.as_bytes());
+                bytes.push(0u8);
+                bytes.extend_from_slice(value.as_bytes());
+                bytes.push(0u8);
+            }
+        }
+    }
+
+    fn write_etw_filters(
+        session_id: u64,
+        filter_args: &HashMap<Guid, String>) {
+        let machine_key = RegKey::predef(enums::HKEY_LOCAL_MACHINE);
+        let value_name = format!("ControllerData_Session_{}", session_id);
+
+        Self::for_each_provider_key(
+            filter_args,
+            |key_path, value| {
+                let mut bytes = Vec::new();
+
+                Self::value_to_filter_bytes(value, &mut bytes);
+
+                let value = RegValue {
+                    vtype: enums::REG_BINARY,
+                    bytes,
+                };
+
+                if let Ok((key, _)) = machine_key.create_subkey(key_path) {
+                    let _ = key.set_raw_value(&value_name, &value);
+                }
+            });
+    }
+
+    fn clear_etw_filters(
+        session_id: u64,
+        filter_args: &HashMap<Guid, String>) {
+        let machine_key = RegKey::predef(enums::HKEY_LOCAL_MACHINE);
+        let value_name = format!("ControllerData_Session_{}", session_id);
+
+        Self::for_each_provider_key(
+            filter_args,
+            |key_path, _| {
+                let flags = enums::KEY_READ | enums::KEY_WRITE;
+                let mut delete_key = false;
+
+                if let Ok(key) = machine_key.open_subkey_with_flags(key_path, flags) {
+                    if key.delete_value(&value_name).is_ok() {
+                        /* Delete if no values left */
+                        delete_key = key.enum_values().next().is_none();
+                    }
+                }
+
+                if delete_key {
+                    /* Best effort */
+                    let _ = machine_key.delete_subkey(key_path);
+                }
+            });
     }
 
     pub fn hook_to_exporter(
         &mut self,
         exporter: UniversalExporter) -> UniversalExporter {
-        /* TODO: Hookup filter args */
+        let filter_args = self.filter_args.clone();
 
-        /* No hooks for ETW */
-        exporter
+        exporter.with_build_hook(move |mut session, _context| {
+            let filter_args = filter_args
+                .borrow_mut()
+                .take()
+                .unwrap_or_default();
+
+            /* Hookup filter args, if any */
+            if !filter_args.is_empty() {
+                for (provider, value) in &filter_args {
+                    let mut data = Vec::new();
+
+                    Self::value_to_filter_bytes(
+                        value,
+                        &mut data);
+
+                    session
+                    .enable_provider(*provider)
+                    .ensure_custom_filter(0, data);
+                }
+
+                /* Need to pass to separate threads as read-only */
+                let filter_args = Arc::new(filter_args);
+
+                /* Write ETW filters when starting */
+                let fn_filter_args = filter_args.clone();
+
+                session.add_starting_callback(move |context| {
+                    Self::write_etw_filters(context.id(), &fn_filter_args);
+                });
+
+                /* Clear ETW filters when stopping */
+                let fn_filter_args = filter_args.clone();
+
+                session.add_stopping_callback(move |context| {
+                    Self::clear_etw_filters(context.id(), &fn_filter_args);
+                });
+            }
+
+            Ok(session)
+        })
     }
 
     pub fn set_filter_args(
@@ -73,13 +203,20 @@ impl OSDotNetEventFactory {
         filter_args: String) -> anyhow::Result<()> {
         let provider = guid_from_provider(provider_name)?;
 
-        match self.filter_args.entry(provider) {
-            Vacant(entry) => {
-                entry.insert(filter_args);
-                Ok(())
+        match self.filter_args.borrow_mut().as_mut() {
+            Some(filter_lookup) => {
+                match filter_lookup.entry(provider) {
+                    Vacant(entry) => {
+                        entry.insert(filter_args);
+                        Ok(())
+                    },
+                    Occupied(_) => {
+                        anyhow::bail!("Filter arguments are already specified for this provider.");
+                    },
+                }
             },
-            Occupied(_) => {
-                anyhow::bail!("Filter arguments are already specified for this provider.");
+            None => {
+                anyhow::bail!("Filter arguments are no longer available.");
             },
         }
     }
