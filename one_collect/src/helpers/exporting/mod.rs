@@ -138,6 +138,7 @@ struct ExportSampler {
     op_code_str_id: usize,
     frames: Vec<u64>,
     os: OSExportSampler,
+    disable_callstacks: bool,
     version_override: Option<u16>,
     op_code_override: Option<u16>,
 }
@@ -188,6 +189,7 @@ impl ExportSampler {
             os_attributes_cache: HashMap::new(),
             version_str_id,
             op_code_str_id,
+            disable_callstacks: false,
         }
     }
 
@@ -274,6 +276,11 @@ impl ExportSampler {
         /* OS Specific callstack hook */
         self.os_event_callstack(data)?;
 
+        /* If we disable callstacks, limit to IP */
+        if self.disable_callstacks {
+            self.frames.truncate(1);
+        }
+
         let time = self.os_event_time(data)?;
         let cpu = self.os_event_cpu(data)?;
 
@@ -324,6 +331,18 @@ impl ExportSampler {
         name: &str,
         value: u64) -> ExportAttributePair {
         self.exporter.borrow_mut().value_attribute(name, value)
+    }
+
+    pub fn record_type(
+        &mut self,
+        record_type: ExportRecordType) -> u16 {
+        self.exporter.borrow_mut().record_type(record_type)
+    }
+
+    pub fn kind(
+        &mut self,
+        kind: &str) -> u16 {
+        self.exporter.borrow_mut().sample_kind(kind)
     }
 
     fn push_unique_attributes(
@@ -603,6 +622,18 @@ impl<'a> ExportTraceContext<'a> {
         self.sampler.borrow().version(self.data)
     }
 
+    pub fn record_type(
+        &mut self,
+        record_type: ExportRecordType) -> u16 {
+        self.sampler.borrow_mut().record_type(record_type)
+    }
+
+    pub fn kind(
+        &mut self,
+        kind: &str) -> u16 {
+        self.sampler.borrow_mut().kind(kind)
+    }
+
     pub fn proxy_data(
         &mut self,
         event_id: usize,
@@ -628,6 +659,12 @@ impl<'a> ExportTraceContext<'a> {
         &mut self,
         version: Option<u16>) {
         self.sampler.borrow_mut().override_version(version);
+    }
+
+    pub fn override_callstacks(
+        &mut self,
+        disable_callstacks: bool) {
+        self.sampler.borrow_mut().disable_callstacks = disable_callstacks;
     }
 
     pub fn override_op_code(

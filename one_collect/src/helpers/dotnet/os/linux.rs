@@ -11,6 +11,7 @@ use std::io::{Read, BufRead, BufReader, Write};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::collections::{HashSet, HashMap};
+use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::sync::mpsc::{self, Sender, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -18,7 +19,10 @@ use std::thread::{self, JoinHandle};
 use crate::helpers::dotnet::*;
 use crate::helpers::dotnet::universal::UniversalDotNetHelperOSHooks;
 use crate::helpers::exporting::{UniversalExporter, ExportSettings, ExportTraceContext};
+use crate::helpers::exporting::process::MetricValue;
+use crate::helpers::exporting::record::ExportRecordType;
 
+use crate::intern::InternedStrings;
 use crate::user_events::*;
 use crate::tracefs::*;
 use crate::perf_event::*;
@@ -177,32 +181,15 @@ impl UserEventProviderEvents {
         count
     }
 
-    fn ensure_keyword_level(
-        &mut self,
-        keyword: u64,
-        level: u8) {
-        self.keyword |= keyword;
-
-        if level > self.level {
-            self.level = level;
-        }
-    }
-
     fn add(
         &mut self,
         tracepoint: String,
-        dotnet_events: &HashSet<usize>,
-        keyword: u64,
-        level: u8) {
+        dotnet_events: &HashSet<usize>) {
         let mut events = Vec::new();
 
         for event in dotnet_events {
             events.push(*event as u32);
         }
-
-        self.ensure_keyword_level(
-            keyword,
-            level);
 
         self.events.push(
             UserEventTracepointEvents {
@@ -568,13 +555,58 @@ impl DotNetHelperLinuxExt for DotNetHelper {
     }
 }
 
-type ProviderCallback = dyn FnMut(&mut ExportTraceContext) -> anyhow::Result<()>;
+
+#[derive(Default)]
+struct LinuxDotNetEventInfo {
+    version: Option<u16>,
+    keywords: Option<u64>,
+    name_id: Option<usize>,
+    logical_id: Option<usize>,
+}
+
+struct LinuxDotNetProviderContext<'a> {
+    payload_range: std::ops::Range<usize>,
+    key: u64,
+    id: usize,
+    info: &'a LinuxDotNetEventInfo,
+    event_names: &'a InternedStrings,
+}
+
+impl<'a> LinuxDotNetProviderContext<'a> {
+    fn short_event_name(
+        &self,
+        output: &mut String) {
+        use std::fmt::Write;
+
+        output.clear();
+
+        match self.info.name_id {
+            Some(id) => {
+                match self.event_names.from_id(id) {
+                    Ok(name) => {
+                        let _ = write!(output, "{}", name);
+                    },
+                    _ => {
+                        let _ = write!(output, "Missing({})", self.id);
+                    }
+                }
+            },
+            None => {
+                let _ = write!(output, "Unknown({})", self.id);
+            },
+        }
+    }
+}
+
+type ProviderCallback = dyn FnMut(&mut ExportTraceContext, &LinuxDotNetProviderContext) -> anyhow::Result<()>;
 
 struct LinuxDotNetProvider {
     events: HashMap<usize, Vec<LinuxDotNetEvent>>,
     named_events: HashMap<String, usize>,
     logical_events: HashMap<usize, Vec<LinuxDotNetEvent>>,
     callbacks: Vec<Box<ProviderCallback>>,
+    keyword: u64,
+    level: u8,
     callback_callstacks: bool,
     filter_args: Option<String>,
 }
@@ -588,6 +620,8 @@ impl Default for LinuxDotNetProvider {
             logical_events: HashMap::new(),
             callbacks: Vec::new(),
             callback_callstacks: false,
+            keyword: 0,
+            level: 0,
         }
     }
 }
@@ -613,11 +647,123 @@ impl LinuxDotNetProvider {
         Ok(())
     }
 
+    pub fn record_provider(
+        &mut self,
+        provider_name: &str,
+        keyword: u64,
+        level: u8,
+        flags: DotNetProviderFlags) -> anyhow::Result<()> {
+        self.ensure_keyword_level(keyword, level);
+
+        self.callback_callstacks = flags.callstacks();
+
+        let provider = guid_from_provider(provider_name)?;
+        let provider_name = provider_name.to_owned();
+
+        #[derive(Copy, Clone)]
+        struct DotNetRecordType {
+            kind: u16,
+            record_type: u16,
+        }
+
+        let mut record_types = HashMap::new();
+        let mut record_names = HashMap::new();
+        let mut name_buf = String::new();
+
+        /* Register provider level callback for recording */
+        self.callbacks.push(
+            Box::new(move |trace, context| {
+                let attributes = trace.default_os_attributes()?;
+                let range = context.payload_range.clone();
+
+                /* Try to get record_type details for ID + PID */
+                let record_type = match record_types.entry(context.key) {
+                    Occupied(entry) => { *entry.get() },
+                    Vacant(entry) => {
+                        /* Check if we already have a record type by name */
+                        context.short_event_name(&mut name_buf);
+
+                        let record_type = match record_names.get(&name_buf) {
+                            Some(record_type) => { *record_type },
+                            None => {
+                                /* Create new record type */
+                                let full_name = event_full_name(
+                                    &provider_name,
+                                    provider,
+                                    &name_buf);
+
+                                let key_name = full_name.to_owned();
+
+                                let kind = trace.kind(&full_name);
+
+                                let mut record_type = ExportRecordType::new(
+                                    kind,
+                                    context.id,
+                                    full_name,
+                                    EventFormat::default());
+
+                                record_type.set_original_data_flag();
+
+                                let record_type = trace.record_type(record_type);
+
+                                let record_type = DotNetRecordType {
+                                    kind,
+                                    record_type,
+                                };
+
+                                record_names.insert(key_name, record_type);
+
+                                record_type
+                            }
+                        };
+
+                        *entry.insert(record_type)
+                    }
+                };
+
+                /* Override callstacks if keywords don't match any bits */
+                if let Some(keywords) = context.info.keywords {
+                    if flags.callstack_keywords() & keywords == 0 {
+                        trace.override_callstacks(true);
+                    }
+                }
+
+                /* Record */
+                let result = trace
+                    .sample_builder()
+                    .with_kind(record_type.kind)
+                    .with_record_type(record_type.record_type)
+                    .with_attributes(attributes)
+                    .with_record_event_data(range)
+                    .save_value(MetricValue::Count(1));
+
+                /* Always reset callstack override */
+                trace.override_callstacks(false);
+
+                result
+            }));
+
+        Ok(())
+    }
+
+    fn ensure_keyword_level(
+        &mut self,
+        keyword: u64,
+        level: u8) {
+        self.keyword |= keyword;
+
+        if level > self.level {
+            self.level = level;
+        }
+    }
+
     pub fn add_named_event(
         &mut self,
         name: String,
         event: LinuxDotNetEvent,
         callstacks: bool) {
+        self.ensure_keyword_level(event.keyword, event.level);
+
         if callstacks {
             self.callback_callstacks = true;
         }
@@ -639,42 +785,21 @@ impl LinuxDotNetProvider {
         &mut self,
         dotnet_id: usize,
         event: LinuxDotNetEvent) {
+        self.ensure_keyword_level(event.keyword, event.level);
+
         self.events
             .entry(dotnet_id)
             .or_default()
             .push(event);
     }
 
-    pub fn named_events_keyword_level(
-        &self,
-        keyword: &mut u64,
-        level: &mut u8) {
-        for (_, events) in self.logical_events.iter() {
-            for event in events {
-                *keyword |= event.keyword;
-
-                if event.level > *level {
-                    *level = event.level;
-                }
-            }
-        }
-    }
-
     pub fn proxy_id_to_events(
         &self,
         proxy_id_set: &HashSet<usize>,
-        dotnet_id_set: &mut HashSet<usize>,
-        keyword: &mut u64,
-        level: &mut u8) {
+        dotnet_id_set: &mut HashSet<usize>) {
         for (dotnet_id, events) in self.events.iter() {
             for event in events {
                 if proxy_id_set.contains(&event.proxy_id) {
-                    *keyword |= event.keyword;
-
-                    if event.level > *level {
-                        *level = event.level;
-                    }
-
                     dotnet_id_set.insert(*dotnet_id);
                 }
             }
@@ -734,8 +859,10 @@ fn register_dotnet_tracepoint(
     let payload = fmt.get_field_ref_unchecked("payload");
     let extension = fmt.get_field_ref_unchecked("extension");
 
-    let mut version_lookup = HashMap::new();
-    let mut id_lookup = HashMap::new();
+    let empty_info = LinuxDotNetEventInfo::default();
+
+    let mut info_lookup = HashMap::new();
+    let mut event_names = InternedStrings::new(16);
     let mut name_buf = String::new();
 
     let settings = settings.with_event(
@@ -774,42 +901,51 @@ fn register_dotnet_tracepoint(
                             if label == nettrace::LABEL_META {
                                 let meta = nettrace::MetaParserV5::parse(data);
 
+                                let mut info = LinuxDotNetEventInfo::default();
+
                                 /* Save version, if any by PID + Event */
                                 if let Some(version) = meta.version() {
-                                    version_lookup.insert(key, version);
+                                    info.version = Some(version as u16);
                                 }
+
+                                info.keywords = meta.keywords();
 
                                 /* Save logical ID by PID + Event if we have any*/
                                 if use_names {
                                     /* Read event name */
                                     meta.event_name(&mut name_buf);
 
+                                    info.name_id = Some(event_names.to_id(&name_buf));
+
                                     /* Lookup event name and return logical event ID */
                                     if let Some(id) = provider.named_events.get(&name_buf) {
-                                        /* TODO Create/Cache Event Format */
-                                        id_lookup.insert(key, *id);
+                                        info.logical_id = Some(*id);
                                     }
                                 }
+
+                                info_lookup.insert(key, info);
                             }
                         });
                 },
                 _ => {},
             }
 
+            let info = info_lookup.get(&key).unwrap_or(&empty_info);
+
             let events = if !use_names {
                 /* Lookup DotNet Event from Manifest ID */
                 provider.events.get(&id)
             } else {
                 /* Lookup DotNet Event from Logical ID (Name) */
-                if let Some(event_id) = id_lookup.get(&key) {
-                    provider.logical_events.get(&event_id)
+                if let Some(logical_id) = info.logical_id {
+                    provider.logical_events.get(&logical_id)
                 } else {
                     None
                 }
             };
 
             /* Provide a version if we have one */
-            if let Some(version) = version_lookup.get(&key) {
+            if let Some(version) = &info.version {
                 trace.override_version(Some(*version as u16));
             }
 
@@ -823,8 +959,18 @@ fn register_dotnet_tracepoint(
             }
 
             /* All tracepoints run provider level callbacks */
-            for callback in &mut provider.callbacks {
-                callback(trace)?;
+            if !provider.callbacks.is_empty() {
+                let context = LinuxDotNetProviderContext {
+                    payload_range: payload_range.clone(),
+                    key,
+                    id,
+                    info,
+                    event_names: &event_names,
+                };
+
+                for callback in &mut provider.callbacks {
+                    callback(trace, &context)?;
+                }
             }
 
             /* Always clear version override */
@@ -929,6 +1075,9 @@ impl OSDotNetEventFactory {
                     provider_events.filter_args = filter_args.clone();
                 }
 
+                provider_events.keyword = provider.borrow().keyword;
+                provider_events.level = provider.borrow().level;
+
                 /* Create event for each group, if any */
                 if !no_callstacks.is_empty() {
                     let tracepoint = format!(
@@ -945,22 +1094,15 @@ impl OSDotNetEventFactory {
                         false,
                         false)?;
 
-                    let mut keyword = 0u64;
-                    let mut level = 0u8;
-
                     dotnet_ids.clear();
 
                     provider.borrow().proxy_id_to_events(
                         &no_callstacks,
-                        &mut dotnet_ids,
-                        &mut keyword,
-                        &mut level);
+                        &mut dotnet_ids);
 
                     provider_events.add(
                         tracepoint,
-                        &dotnet_ids,
-                        keyword,
-                        level);
+                        &dotnet_ids);
                 }
 
                 if !callstacks.is_empty() {
@@ -978,22 +1120,15 @@ impl OSDotNetEventFactory {
                         true,
                         false)?;
 
-                    let mut keyword = 0u64;
-                    let mut level = 0u8;
-
                     dotnet_ids.clear();
 
                     provider.borrow().proxy_id_to_events(
                         &callstacks,
-                        &mut dotnet_ids,
-                        &mut keyword,
-                        &mut level);
+                        &mut dotnet_ids);
 
                     provider_events.add(
                         tracepoint,
-                        &dotnet_ids,
-                        keyword,
-                        level);
+                        &dotnet_ids);
                 }
 
                 if provider.borrow().has_named_events() ||
@@ -1012,16 +1147,7 @@ impl OSDotNetEventFactory {
                         provider.borrow().callback_callstacks,
                         true)?;
 
-                    let mut keyword = 0u64;
-                    let mut level = 0u8;
-
-                    provider.borrow().named_events_keyword_level(
-                        &mut keyword,
-                        &mut level);
-
                     provider_events.default_tracepoint = Some(tracepoint);
-
-                    provider_events.ensure_keyword_level(keyword, level);
                 }
 
                 match settings_tracker_events.lock() {
@@ -1091,6 +1217,20 @@ impl OSDotNetEventFactory {
             /* Drop factory: This ensures we keep user_events FD until drop */
             let _ = user_events.borrow_mut().take();
         })
+    }
+
+    pub fn record_provider(
+        &mut self,
+        provider_name: &str,
+        keyword: u64,
+        level: u8,
+        flags: DotNetProviderFlags) -> anyhow::Result<()> {
+        self.providers
+            .borrow_mut()
+            .entry(provider_name.into())
+            .or_insert_with(|| Writable::new(LinuxDotNetProvider::default()))
+            .borrow_mut()
+            .record_provider(provider_name, keyword, level, flags)
     }
 
     pub fn set_filter_args(

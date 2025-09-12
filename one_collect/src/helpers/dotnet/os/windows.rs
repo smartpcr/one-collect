@@ -197,6 +197,16 @@ impl OSDotNetEventFactory {
         })
     }
 
+    pub fn record_provider(
+        &mut self,
+        provider_name: &str,
+        keyword: u64,
+        level: u8,
+        flags: DotNetProviderFlags) -> anyhow::Result<()> {
+        /* TODO: Utilize ETW provider level callback */
+        anyhow::bail!("Not yet supported.");
+    }
+
     pub fn set_filter_args(
         &mut self,
         provider_name: &str,
