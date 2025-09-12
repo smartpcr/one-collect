@@ -1110,12 +1110,12 @@ impl OSDotNetEventFactory {
         provider_name: &str,
         keyword: u64,
         level: u8,
-        id: usize,
+        id: Option<usize>,
         name: String) -> anyhow::Result<Event> {
         let provider = guid_from_provider(provider_name)?;
         let full_name = event_full_name(provider_name, provider, &name);
 
-        let event = match (self.proxy)(full_name, id) {
+        let event = match (self.proxy)(full_name, id.unwrap_or(0)) {
             Some(event) => { event },
             None => { anyhow::bail!("Event couldn't be created with proxy"); },
         };
@@ -1140,15 +1140,18 @@ impl OSDotNetEventFactory {
             .or_insert_with(|| Writable::new(LinuxDotNetProvider::default()))
             .borrow_mut();
 
-        if id == 0 {
-            provider.add_named_event(
-                name,
-                dotnet_event,
-                !event.has_no_callstack_flag());
-        } else {
-            provider.add_event(
-                id,
-                dotnet_event);
+        match id {
+            None => {
+                provider.add_named_event(
+                    name,
+                    dotnet_event,
+                    !event.has_no_callstack_flag());
+            },
+            Some(id) => {
+                provider.add_event(
+                    id,
+                    dotnet_event);
+            }
         }
 
         Ok(event)

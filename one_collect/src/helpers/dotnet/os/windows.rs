@@ -226,12 +226,13 @@ impl OSDotNetEventFactory {
         provider_name: &str,
         keyword: u64,
         level: u8,
-        id: usize,
+        id: Option<usize>,
         mut name: String) -> anyhow::Result<Event> {
         let provider = guid_from_provider(provider_name)?;
         name = event_full_name(provider_name, provider, &name);
 
-        let mut event = Event::new(id, name);
+        /* TODO: Windows TraceLogging Support */
+        let mut event = Event::new(id.unwrap_or(0), name);
 
         *event.extension_mut().provider_mut() = provider;
         *event.extension_mut().level_mut() = level;
@@ -541,7 +542,7 @@ mod tests {
                 provider.into(),
                 0,
                 1,
-                2,
+                Some(2),
                 "Test".into()).unwrap();
 
             let expected = Guid::from_u128(guid);

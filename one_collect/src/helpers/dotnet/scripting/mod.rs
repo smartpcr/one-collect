@@ -278,7 +278,26 @@ impl DotNetScripting for ScriptedUniversalExporter {
                 &provider_name,
                 keyword as u64,
                 level as u8,
-                id as usize,
+                Some(id as usize),
+                name) {
+                Ok(event) => { Ok(event.into()) },
+                Err(e) => { Err(format!("{}", e).into()) }
+            }
+        });
+
+        let fn_factory = factory.clone();
+
+        self.rhai_engine().register_fn(
+            "self_describing_event_from_dotnet",
+            move |provider_name: String,
+            keyword: i64,
+            level: i64,
+            name: String| -> Result<ScriptEvent, Box<EvalAltResult>> {
+            match fn_factory.borrow_mut().new_event(
+                &provider_name,
+                keyword as u64,
+                level as u8,
+                None,
                 name) {
                 Ok(event) => { Ok(event.into()) },
                 Err(e) => { Err(format!("{}", e).into()) }
