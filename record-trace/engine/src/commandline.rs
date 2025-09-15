@@ -5,6 +5,7 @@ use clap::{crate_version, Parser, ValueEnum};
 use std::env;
 use std::fmt;
 use std::path::PathBuf;
+use std::ffi::OsString;
 use std::process;
 
 use crate::export::{Exporter, NetTraceExporter, PerfViewExporter};
@@ -53,7 +54,7 @@ impl fmt::Display for Format {
 }
 
 #[derive(Debug)]
-pub (crate) struct RecordArgs {
+pub struct RecordArgs {
     output_path: PathBuf,
     format: Format,
     on_cpu: bool,
@@ -64,8 +65,11 @@ pub (crate) struct RecordArgs {
 }
 
 impl RecordArgs {
-    pub fn parse() -> Self {
-        let command_args = Args::parse();
+    pub fn parse<I, T>(args: I) -> Self 
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString> + Clone {
+        let command_args = Args::parse_from(args);
         
         // If --out isn't specified, default to the current working directory.
         let output_path = match command_args.out {

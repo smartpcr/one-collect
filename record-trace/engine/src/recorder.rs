@@ -2,6 +2,8 @@
 // Licensed under the MIT license.
 
 use crate::commandline::RecordArgs;
+use crate::EngineOutput;
+
 use one_collect::helpers::dotnet::UniversalDotNetHelp;
 use one_collect::helpers::{dotnet::universal::UniversalDotNetHelper, exporting::ExportSettings};
 use one_collect::helpers::exporting::universal::UniversalExporter;
@@ -18,26 +20,29 @@ use one_collect::Writable;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::fmt::Write;
-use std::process;
 
 const DEFAULT_CPU_FREQUENCY: u64 = 1000;
 
-pub (crate) struct Recorder {
+pub struct Recorder {
     args: RecordArgs,
+    output: Arc<EngineOutput>,
 }
 
 impl Recorder {
-    pub (crate) fn new(args: RecordArgs) -> Self {
+    pub fn new(
+        args: RecordArgs,
+        output: EngineOutput) -> Self {
         Self {
             args,
+            output: Arc::new(output),
         }
     }
 
-    pub (crate) fn run(&mut self) {
+    pub fn run(&mut self) -> i32 {
         let mut format = self.args.format();
         if let Err(e) = format.validate(&self.args) {
-            eprintln!("Error: {}", e);
-            process::exit(1);
+            self.output.error(&format!("Error: {}", e));
+            return 1;
         }
 
         let mut settings = ExportSettings::default();
@@ -51,6 +56,8 @@ impl Recorder {
         if self.args.off_cpu() {
             settings = settings.with_cswitches();
         }
+
+        let continue_recording = Arc::new(AtomicBool::new(true));
 
         // Live.
         if self.args.live() {
@@ -136,6 +143,8 @@ impl Recorder {
             }
 
             let line = Writable::new(String::with_capacity(512));
+            let sample_continue = continue_recording.clone();
+            let sample_output = self.output.clone();
 
             settings = settings.with_sample_hook(move |context| {
                 let elapsed = now.elapsed();
@@ -179,7 +188,12 @@ impl Recorder {
                     closure(&mut line, record.record_data());
                 }
 
-                println!("{}", line);
+                // Send live output
+                if sample_output.live(&line) != 0 {
+                    // Output resulted in a cancellation.
+                    sample_continue.store(false, Ordering::SeqCst);
+                }
+
                 ExportFilterAction::Keep
             });
         }
@@ -204,8 +218,8 @@ impl Recorder {
                 match scripted.from_script(script) {
                     Ok(universal) => { universal },
                     Err(e) => {
-                        eprintln!("Error: {}", e);
-                        process::exit(1);
+                        self.output.error(&format!("Error: {}", e));
+                        return 1;
                     }
                 }
             },
@@ -213,51 +227,52 @@ impl Recorder {
                 UniversalExporter::new(settings)
             }
         }.with_dotnet_help(dotnet);
-
-        // Record until the user hits CTRL+C.
-        let continue_recording = Arc::new(AtomicBool::new(true));
-        let handler_clone = continue_recording.clone();
-        ctrlc::set_handler(move || {
-            handler_clone.store(false, Ordering::SeqCst);
-        }).expect("Unable to setup CTRL+C handler");
-        
         
         // Start recording.
         let print_banner = Arc::new(AtomicBool::new(true));
+        let parse_output = self.output.clone();
 
         let parse_result = universal.parse_until("record-trace", move || {
-            
             // Print the banner telling the user that recording has started.
             if print_banner.load(Ordering::SeqCst) {
                 print_banner.store(false, Ordering::SeqCst);
-                println!("Recording started.  Press CTRL+C to stop.");
+                parse_output.normal("Recording started.  Press CTRL+C to stop.");
             }
 
-            // When the user hits CTRL+C this will flip to true.
+            // Give progress callback.
+            if parse_output.progress("") != 0 {
+                // Non-zero results in cancellation.
+                continue_recording.store(false, Ordering::SeqCst);
+            }
+
+            // When a callback returns non-zero, this will flip.
             !continue_recording.load(Ordering::SeqCst)
         });
 
         let exporter = match parse_result {
             Ok(exporter) => exporter,
             Err(e) => {
-                eprintln!("Error: {}", e);
-                process::exit(1);
+                self.output.error(&format!("Error: {}", e));
+                return 1;
             }
         };
 
-        println!("\nRecording stopped.");
+        self.output.normal("\nRecording stopped.");
         let mut exporter = exporter.borrow_mut();
 
         // Capture binary metdata and resolve symbols.
-        println!("Resolving symbols.");
+        self.output.normal("Resolving symbols.");
         exporter.capture_and_resolve_symbols();
 
         if let Err(e) = format.run(&mut exporter, &self.args) {
-            eprintln!("Error: {}", e);
-            process::exit(1);
+            self.output.error(&format!("Error: {}", e));
+            return 1;
         }
 
-        println!("Finished recording trace.");
-        println!("Trace written to {}", self.args.output_path().display());
+        self.output.normal("Finished recording trace.");
+        self.output.normal(
+            &format!("Trace written to {}", self.args.output_path().display()));
+
+        0
     }
 }
