@@ -30,6 +30,12 @@ jobs:
     - name: 'ruwind: Run tests'
       working-directory: ruwind
       run: cargo test --verbose
+    - name: 'record-trace: Build'
+      working-directory: record-trace/ffi
+      run: cargo build --verbose
+    - name: 'record-trace: Run tests'
+      working-directory: record-trace/ffi
+      run: cargo test --verbose
 
   build_win_debug:
     name: Build and Test (Debug/Windows)
@@ -48,6 +54,12 @@ jobs:
       run: cargo build --verbose
     - name: 'ruwind: Run tests'
       working-directory: ruwind
+      run: cargo test --verbose
+    - name: 'record-trace: Build'
+      working-directory: record-trace/ffi
+      run: cargo build --verbose
+    - name: 'record-trace: Run tests'
+      working-directory: record-trace/ffi
       run: cargo test --verbose
 
   build_release:
@@ -68,6 +80,12 @@ jobs:
     - name: 'ruwind: Run tests'
       working-directory: ruwind
       run: cargo test --release --verbose
+    - name: 'record-trace: Build'
+      working-directory: record-trace/ffi
+      run: cargo build --release --verbose
+    - name: 'record-trace: Run tests'
+      working-directory: record-trace/ffi
+      run: cargo test --release --verbose
 
   build_win_release:
     name: Build and Test (Release/Windows)
@@ -86,6 +104,12 @@ jobs:
       run: cargo build --release --verbose
     - name: 'ruwind: Run tests'
       working-directory: ruwind
+      run: cargo test --release --verbose
+    - name: 'record-trace: Build'
+      working-directory: record-trace/ffi
+      run: cargo build --release --verbose
+    - name: 'record-trace: Run tests'
+      working-directory: record-trace/ffi
       run: cargo test --release --verbose
 
   bench:
