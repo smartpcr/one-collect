@@ -236,7 +236,7 @@ impl Recorder {
             // Print the banner telling the user that recording has started.
             if print_banner.load(Ordering::SeqCst) {
                 print_banner.store(false, Ordering::SeqCst);
-                parse_output.normal("Recording started.  Press CTRL+C to stop.");
+                parse_output.start("Recording started.");
             }
 
             // Give progress callback.
@@ -257,7 +257,7 @@ impl Recorder {
             }
         };
 
-        self.output.normal("\nRecording stopped.");
+        self.output.end("Recording stopped.");
         let mut exporter = exporter.borrow_mut();
 
         // Capture binary metdata and resolve symbols.

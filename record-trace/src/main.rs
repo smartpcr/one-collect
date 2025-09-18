@@ -27,6 +27,19 @@ fn main() {
         }
     });
 
+    // Tell users to hit CTRL+C to stop.
+    output.with_start(|output| {
+        println!("{}  Press CTRL+C to stop.", output);
+        0
+    });
+
+    // Skip CTRL+C character before ending.
+    output.with_end(|output| {
+        println!("\n{}", output);
+        0
+    });
+
+    // Record.
     let mut recorder = Recorder::new(
         RecordArgs::parse(std::env::args_os()),
         output);

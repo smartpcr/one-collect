@@ -11,6 +11,8 @@ pub struct EngineOutput {
     on_live: Box<EngineOutputCallback>,
     on_normal: Box<EngineOutputCallback>,
     on_error: Box<EngineOutputCallback>,
+    on_start: Box<EngineOutputCallback>,
+    on_end: Box<EngineOutputCallback>,
     on_progress: Box<EngineOutputCallback>,
 }
 
@@ -20,6 +22,8 @@ impl Default for EngineOutput {
             on_live: Box::new(Self::default_normal),
             on_normal: Box::new(Self::default_normal),
             on_error: Box::new(Self::default_error),
+            on_start: Box::new(Self::default_normal),
+            on_end: Box::new(Self::default_normal),
             on_progress: Box::new(|_| { 0 }),
         }
     }
@@ -60,6 +64,18 @@ impl EngineOutput {
         self.on_progress = Box::new(callback);
     }
 
+    pub fn with_start(
+        &mut self,
+        callback: impl Fn(&str) -> i32 + 'static + Send + Sync) {
+        self.on_start = Box::new(callback);
+    }
+
+    pub fn with_end(
+        &mut self,
+        callback: impl Fn(&str) -> i32 + 'static + Send + Sync) {
+        self.on_end = Box::new(callback);
+    }
+
     fn live(&self, output: &str) -> i32 { (self.on_live)(output) }
 
     fn normal(&self, output: &str) -> i32 { (self.on_normal)(output) }
@@ -67,4 +83,8 @@ impl EngineOutput {
     fn error(&self, output: &str) -> i32 { (self.on_error)(output) }
 
     fn progress(&self, output: &str) -> i32 { (self.on_progress)(output) }
+
+    fn start(&self, output: &str) -> i32 { (self.on_start)(output) }
+
+    fn end(&self, output: &str) -> i32 { (self.on_end)(output) }
 }
