@@ -229,11 +229,13 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-rust-crypto
-===========
+sha1
+====
 
-Copyright (c) 2006-2009 Graydon Hoare
+Copyright (c) 2016-2025 The RustCrypto Project Developers
+Copyright (c) 2016 Artyom Pavlov
 Copyright (c) 2009-2013 Mozilla Foundation
+Copyright (c) 2006-2009 Graydon Hoare
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
