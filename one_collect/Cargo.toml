@@ -21,6 +21,9 @@ chrono = "0.4.39"
 rhai = "1.21.0"
 rust-crypto = "0.2.36"
 
+[target.'cfg(target_os = "windows")'.dependencies]
+winreg = "0.55.0"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.153"
 

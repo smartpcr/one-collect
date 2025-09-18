@@ -160,6 +160,38 @@ impl DotNetEventGroup {
 }
 
 #[derive(Default, Clone)]
+pub (crate) struct DotNetProviderFlags {
+    callstacks: bool,
+    callstack_keywords: u64,
+}
+
+impl DotNetProviderFlags {
+    fn with_callstacks(&mut self) {
+        self.callstacks = true;
+        self.callstack_keywords = u64::MAX;
+    }
+
+    fn with_callstacks_for_keywords(
+        &mut self,
+        keywords: u64) {
+        self.callstacks = true;
+        self.callstack_keywords = keywords;
+    }
+
+    pub fn callstacks(&self) -> bool { self.callstacks }
+
+    pub fn callstack_keywords(&self) -> u64 { self.callstack_keywords }
+}
+
+impl CustomType for DotNetProviderFlags {
+    fn build(mut builder: TypeBuilder<Self>) {
+        builder
+            .with_fn("with_callstacks", Self::with_callstacks)
+            .with_fn("with_callstacks_for_keywords", Self::with_callstacks_for_keywords);
+    }
+}
+
+#[derive(Default, Clone)]
 pub (crate) struct DotNetEvent {
     id: u16,
     keywords: u64,
@@ -236,6 +268,7 @@ pub trait DotNetScripting {
 impl DotNetScripting for ScriptedUniversalExporter {
     fn enable_dotnet_scripting(&mut self) {
         self.rhai_engine().build_type::<DotNetScenario>();
+        self.rhai_engine().build_type::<DotNetProviderFlags>();
 
         let fn_exporter = self.export_swapper();
 
@@ -247,6 +280,10 @@ impl DotNetScripting for ScriptedUniversalExporter {
         self.rhai_engine().register_fn(
             "new_dotnet_scenario",
             || -> DotNetScenario { DotNetScenario::default() });
+
+        self.rhai_engine().register_fn(
+            "new_dotnet_provider_flags",
+            || -> DotNetProviderFlags { DotNetProviderFlags::default() });
 
         let fn_exporter = self.export_swapper();
         let fn_factory = factory.clone();
@@ -278,9 +315,60 @@ impl DotNetScripting for ScriptedUniversalExporter {
                 &provider_name,
                 keyword as u64,
                 level as u8,
-                id as usize,
+                Some(id as usize),
                 name) {
                 Ok(event) => { Ok(event.into()) },
+                Err(e) => { Err(format!("{}", e).into()) }
+            }
+        });
+
+        let fn_factory = factory.clone();
+
+        self.rhai_engine().register_fn(
+            "self_describing_event_from_dotnet",
+            move |provider_name: String,
+            keyword: i64,
+            level: i64,
+            name: String| -> Result<ScriptEvent, Box<EvalAltResult>> {
+            match fn_factory.borrow_mut().new_event(
+                &provider_name,
+                keyword as u64,
+                level as u8,
+                None,
+                name) {
+                Ok(event) => { Ok(event.into()) },
+                Err(e) => { Err(format!("{}", e).into()) }
+            }
+        });
+
+        let fn_factory = factory.clone();
+
+        self.rhai_engine().register_fn(
+            "set_dotnet_filter_args",
+            move |provider_name: String,
+            filter_args: String| -> Result<(), Box<EvalAltResult>> {
+            match fn_factory.borrow_mut().set_filter_args(
+                &provider_name,
+                filter_args) {
+                Ok(_) => { Ok(()) },
+                Err(e) => { Err(format!("{}", e).into()) }
+            }
+        });
+
+        let fn_factory = factory.clone();
+
+        self.rhai_engine().register_fn(
+            "record_dotnet_provider",
+            move |provider_name: String,
+            keyword: i64,
+            level: i64,
+            flags: DotNetProviderFlags| -> Result<(), Box<EvalAltResult>> {
+            match fn_factory.borrow_mut().record_provider(
+                &provider_name,
+                keyword as u64,
+                level as u8,
+                flags) {
+                Ok(_) => { Ok(()) },
                 Err(e) => { Err(format!("{}", e).into()) }
             }
         });

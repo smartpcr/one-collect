@@ -514,6 +514,11 @@ impl EVENT_RECORD {
     }
 }
 
+pub struct TraceFilter {
+    filter_type: u32,
+    filter_data: Vec<u8>,
+}
+
 pub struct TraceEnable {
     provider: Guid,
     capture_environment: bool,
@@ -524,6 +529,7 @@ pub struct TraceEnable {
     keyword: u64,
     events: Vec<u16>,
     callstacks: Vec<u16>,
+    custom_filter: Option<TraceFilter>,
 }
 
 impl TraceEnable {
@@ -539,6 +545,7 @@ impl TraceEnable {
             keyword: 0,
             events: Vec::new(),
             callstacks: Vec::new(),
+            custom_filter: None,
         }
     }
 
@@ -559,6 +566,16 @@ impl TraceEnable {
     pub fn ensure_no_filtering(
         &mut self) {
         self.no_filtering = true;
+    }
+
+    pub fn ensure_custom_filter(
+        &mut self,
+        filter_type: u32,
+        filter_data: Vec<u8>) {
+        self.custom_filter = Some(TraceFilter {
+            filter_type,
+            filter_data,
+        });
     }
 
     pub fn ensure_property(
@@ -659,6 +676,15 @@ impl TraceEnable {
 
             let mut filters = Vec::new();
 
+            if let Some(custom) = &self.custom_filter {
+                let mut custom_desc = EVENT_FILTER_DESCRIPTOR::default();
+                custom_desc.Type = custom.filter_type;
+                custom_desc.Filter = custom.filter_data.as_ptr();
+                custom_desc.Size = custom.filter_data.len() as u32;
+
+                filters.push(custom_desc);
+            }
+
             if !self.events.is_empty() && self.events.len() <= 64 {
                 filters.push(events);
             }
@@ -756,6 +782,8 @@ impl TraceSession {
     }
 
     pub fn handle(&self) -> u64 { self.handle }
+
+    pub fn id(&self) -> u64 { self.properties.Wnode.HistoricalContext }
 
     pub fn start(
         &mut self) -> anyhow::Result<()> {

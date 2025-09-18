@@ -54,6 +54,10 @@ impl ExportRecordType {
         }
     }
 
+    pub fn set_original_data_flag(&mut self) {
+        self.flags |= EXPORT_RECORD_FLAG_ORIG_DATA;
+    }
+
     pub fn is_original_data(&self) -> bool {
         self.flags & EXPORT_RECORD_FLAG_ORIG_DATA != 0
     }
