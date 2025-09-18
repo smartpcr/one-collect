@@ -12,8 +12,7 @@ use crate::scripting::ScriptEvent;
 use crate::Writable;
 use crate::Guid;
 
-use crypto::sha1::Sha1;
-use crypto::digest::Digest;
+use sha1::{Sha1, Digest};
 
 use rhai::{CustomType, TypeBuilder, EvalAltResult};
 
@@ -79,16 +78,14 @@ pub(crate) fn guid_from_provider(provider_name: &str) -> anyhow::Result<Guid> {
 
                 let mut hasher = Sha1::new();
 
-                hasher.input(&namespace_bytes);
+                hasher.update(&namespace_bytes);
 
                 for c in provider_name.to_uppercase().chars() {
                     let c = c as u16;
-                    hasher.input(&c.to_be_bytes());
+                    hasher.update(&c.to_be_bytes());
                 }
 
-                let mut result: [u8; 20] = [0; 20];
-
-                hasher.result(&mut result);
+                let result = hasher.finalize();
 
                 let a = u32::from_ne_bytes(result[0..4].try_into()?);
                 let b = u16::from_ne_bytes(result[4..6].try_into()?);
