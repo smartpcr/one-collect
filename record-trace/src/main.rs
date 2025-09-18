@@ -1,14 +1,35 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-mod commandline;
-mod export;
-mod recorder;
+use engine::commandline::RecordArgs;
+use engine::recorder::Recorder;
+use engine::EngineOutput;
 
-use commandline::RecordArgs;
-use recorder::Recorder;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 fn main() {
-    let mut recorder = Recorder::new(RecordArgs::parse());
+    let mut output = EngineOutput::default();
+
+    let continue_recording = Arc::new(AtomicBool::new(true));
+    let handler_clone = continue_recording.clone();
+
+    // Record until the user hits CTRL+C.
+    ctrlc::set_handler(move || {
+        handler_clone.store(false, Ordering::SeqCst);
+    }).expect("Unable to setup CTRL+C handler");
+
+    output.with_progress(move |_| {
+        if !continue_recording.load(Ordering::SeqCst) {
+            1
+        } else {
+            0
+        }
+    });
+
+    let mut recorder = Recorder::new(
+        RecordArgs::parse(std::env::args_os()),
+        output);
+
     recorder.run();
 }
