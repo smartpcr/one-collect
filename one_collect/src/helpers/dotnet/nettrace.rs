@@ -14,6 +14,8 @@ const U32_LEN: usize = 4;
 const U64_LEN: usize = 8;
 const GUID_LEN: usize = 16;
 
+use crate::event::{LocationType, EventFormat, EventField};
+
 pub fn parse_event_extension_v1(
     data: &[u8],
     mut output: impl FnMut(u8, &[u8])) {
@@ -87,6 +89,239 @@ pub fn parse_event_extension_v1(
         }
 
         count += 1;
+    }
+}
+
+pub struct FieldsParserV5 {
+}
+
+impl FieldsParserV5 {
+    const TYPE_OBJECT:u32 = 1u32;
+    const TYPE_BOOL:u32 = 3u32;
+    const TYPE_UTF16_CODE_UNIT:u32 = 4u32;
+    const TYPE_SBYTE:u32 = 5u32;
+    const TYPE_BYTE:u32 = 6u32;
+    const TYPE_INT16:u32 = 7u32;
+    const TYPE_UINT16:u32 = 8u32;
+    const TYPE_INT32:u32 = 9u32;
+    const TYPE_UINT32:u32 = 10u32;
+    const TYPE_INT64:u32 = 11u32;
+    const TYPE_UINT64:u32 = 12u32;
+    const TYPE_SINGLE:u32 = 13u32;
+    const TYPE_DOUBLE:u32 = 14u32;
+    const TYPE_DATE_TIME:u32 = 16u32;
+    const TYPE_GUID:u32 = 17u32;
+    const TYPE_UTF16_STRING:u32 = 18u32;
+    const TYPE_ARRAY:u32 = 19u32;
+
+    fn read_int(data: &[u8]) -> Option<u32> {
+        if data.len() < U32_LEN {
+            None
+        } else {
+            Some(u32::from_le_bytes(data[0..U32_LEN].try_into().unwrap()))
+        }
+    }
+
+    fn skip_string<'a>(data: &'a [u8]) -> &'a [u8] {
+        let mut offset = 0;
+        for c in data.chunks_exact(2) {
+            let c = u16::from_le_bytes(c.try_into().unwrap());
+
+            offset += 2;
+
+            if c == 0 { break; }
+        }
+
+        &data[offset..]
+    }
+
+    fn read_string<'a>(
+        data: &'a [u8],
+        output: &mut String) -> &'a [u8] {
+        output.clear();
+
+        let mut offset = 0;
+        for c in data.chunks_exact(2) {
+            let c = u16::from_le_bytes(c.try_into().unwrap());
+
+            offset += 2;
+
+            if c == 0 { break; }
+
+            match char::from_u32(c as u32) {
+                Some(c) => { output.push(c); },
+                None => { output.push('?'); },
+            }
+        }
+
+        &data[offset..]
+    }
+
+    fn append_field(
+        format: &mut EventFormat,
+        field_name: String,
+        field_type: &str,
+        size: usize) {
+        let mut offset = 0;
+
+        if let Some(field) = format.fields().last() {
+            offset = field.offset + field.size;
+        }
+
+        let location = match field_type {
+            "string" => LocationType::StaticUTF16String,
+            _ => LocationType::Static,
+        };
+
+        format.add_field(EventField::new(
+            field_name,
+            field_type.to_owned(),
+            location,
+            offset,
+            size));
+    }
+
+    fn parse_object<'a>(
+        mut fields: &'a [u8],
+        format: &mut EventFormat,
+        depth: usize) -> &'a [u8] {
+        if depth > 32 {
+            return &[];
+        }
+
+        if let Some(mut count) = Self::read_int(fields) {
+            fields = &fields[4..];
+
+            while count > 0 {
+                let ftype = match Self::read_int(fields) {
+                    Some(value) => {
+                        fields = &fields[4..];
+                        value
+                    },
+                    None => { break; },
+                };
+
+                match ftype {
+                    Self::TYPE_OBJECT => {
+                        fields = Self::parse_object(fields, format, depth+1);
+
+                        /* Ignore Object Name */
+                        fields = Self::skip_string(fields);
+                    },
+
+                    Self::TYPE_BOOL => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "u32", 4);
+                    },
+
+                    Self::TYPE_UTF16_CODE_UNIT => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "u16", 2);
+                    },
+
+                    Self::TYPE_SBYTE => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "s8", 1);
+                    },
+
+                    Self::TYPE_BYTE => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "u8", 1);
+                    },
+
+                    Self::TYPE_INT16 => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "s16", 2);
+                    },
+
+                    Self::TYPE_UINT16 => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "u16", 2);
+                    },
+
+                    Self::TYPE_INT32 => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "s32", 4);
+                    },
+
+                    Self::TYPE_UINT32 => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "u32", 4);
+                    },
+
+                    Self::TYPE_INT64 => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "s64", 8);
+                    },
+
+                    Self::TYPE_UINT64 => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "u64", 8);
+                    },
+
+                    Self::TYPE_SINGLE => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "float", 4);
+                    },
+
+                    Self::TYPE_DOUBLE => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "double", 8);
+                    },
+
+                    Self::TYPE_DATE_TIME => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "u8", 16);
+                    },
+
+                    Self::TYPE_GUID => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "u8", 16);
+                    },
+
+                    Self::TYPE_UTF16_STRING => {
+                        let mut name = String::new();
+                        fields = Self::read_string(fields, &mut name);
+                        Self::append_field(format, name, "string", 0);
+                    },
+
+                    _ => {
+                        /* Unknown, force no more. */
+                        fields = &[];
+                        break;
+                    },
+                }
+
+                count -= 1;
+            }
+        } else {
+            /* No more, not enough data. */
+            fields = &[];
+        }
+
+        fields
+    }
+
+    pub fn parse(mut fields: &[u8]) -> EventFormat {
+        let mut format = EventFormat::default();
+
+        Self::parse_object(fields, &mut format, 1);
+
+        format
     }
 }
 
