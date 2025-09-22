@@ -95,6 +95,11 @@ pub fn parse_event_extension_v1(
 pub struct FieldsParserV5 {
 }
 
+struct FieldType {
+    type_name: &'static str,
+    size: usize,
+}
+
 impl FieldsParserV5 {
     const TYPE_OBJECT:u32 = 1u32;
     const TYPE_BOOL:u32 = 3u32;
@@ -170,7 +175,13 @@ impl FieldsParserV5 {
 
         let location = match field_type {
             "string" => LocationType::StaticUTF16String,
-            _ => LocationType::Static,
+            _ => {
+                if field_type.starts_with("__dyn_array") {
+                    LocationType::StaticLenPrefixArray
+                } else {
+                    LocationType::Static
+                }
+            },
         };
 
         format.add_field(EventField::new(
@@ -181,6 +192,136 @@ impl FieldsParserV5 {
             size));
     }
 
+    fn parse_type<'a>(fields: &'a [u8]) -> Option<FieldType> {
+        let ftype = match Self::read_int(fields) {
+            Some(value) => { value },
+            None => { return None; },
+        };
+
+        match ftype {
+            Self::TYPE_OBJECT => {
+                Some(FieldType {
+                    type_name: "object",
+                    size: 0,
+                })
+            },
+
+            Self::TYPE_BOOL => {
+                Some(FieldType {
+                    type_name: "u32",
+                    size: 4,
+                })
+            },
+
+            Self::TYPE_UTF16_CODE_UNIT => {
+                Some(FieldType {
+                    type_name: "u16",
+                    size: 2,
+                })
+            },
+
+            Self::TYPE_SBYTE => {
+                Some(FieldType {
+                    type_name: "s8",
+                    size: 1,
+                })
+            },
+
+            Self::TYPE_BYTE => {
+                Some(FieldType {
+                    type_name: "u8",
+                    size: 1,
+                })
+            },
+
+            Self::TYPE_INT16 => {
+                Some(FieldType {
+                    type_name: "s16",
+                    size: 2,
+                })
+            },
+
+            Self::TYPE_UINT16 => {
+                Some(FieldType {
+                    type_name: "u16",
+                    size: 2,
+                })
+            },
+
+            Self::TYPE_INT32 => {
+                Some(FieldType {
+                    type_name: "s32",
+                    size: 4,
+                })
+            },
+
+            Self::TYPE_UINT32 => {
+                Some(FieldType {
+                    type_name: "u32",
+                    size: 4,
+                })
+            },
+
+            Self::TYPE_INT64 => {
+                Some(FieldType {
+                    type_name: "s64",
+                    size: 8,
+                })
+            },
+
+            Self::TYPE_UINT64 => {
+                Some(FieldType {
+                    type_name: "u64",
+                    size: 8,
+                })
+            },
+
+            Self::TYPE_SINGLE => {
+                Some(FieldType {
+                    type_name: "float",
+                    size: 4,
+                })
+            },
+
+            Self::TYPE_DOUBLE => {
+                Some(FieldType {
+                    type_name: "double",
+                    size: 8,
+                })
+            },
+
+            Self::TYPE_DATE_TIME => {
+                Some(FieldType {
+                    type_name: "u8",
+                    size: 16,
+                })
+            },
+
+            Self::TYPE_GUID => {
+                Some(FieldType {
+                    type_name: "u8",
+                    size: 16,
+                })
+            },
+
+            Self::TYPE_UTF16_STRING => {
+                Some(FieldType {
+                    type_name: "string",
+                    size: 0,
+                })
+            },
+
+            Self::TYPE_ARRAY => {
+                Some(FieldType {
+                    type_name: "array",
+                    size: 0,
+                })
+            },
+
+            _ => { None }
+        }
+    }
+
     fn parse_object<'a>(
         mut fields: &'a [u8],
         format: &mut EventFormat,
@@ -189,121 +330,115 @@ impl FieldsParserV5 {
             return &[];
         }
 
+        let mut v2 = false;
+
         if let Some(mut count) = Self::read_int(fields) {
             fields = &fields[4..];
 
-            while count > 0 {
-                let ftype = match Self::read_int(fields) {
-                    Some(value) => {
+            if count == 0 {
+                /* Handle V2Params, if any */
+                if let Some(bytes) = Self::read_int(fields) {
+                    fields = &fields[4..];
+
+                    if bytes == 0 || fields.len() == 0 {
+                        /* Not enough bytes */
+                        return &[];
+                    }
+
+                    let tag = fields[0];
+                    fields = &fields[1..];
+
+                    if tag != 2 {
+                        /* Not V2Params, unknown. */
+                        return &[];
+                    }
+
+                    /* Update count */
+                    if let Some(new_count) = Self::read_int(fields) {
                         fields = &fields[4..];
-                        value
-                    },
-                    None => { break; },
-                };
+                        count = new_count;
 
-                match ftype {
-                    Self::TYPE_OBJECT => {
-                        fields = Self::parse_object(fields, format, depth+1);
+                        v2 = true;
+                    }
+                }
+            }
 
-                        /* Ignore Object Name */
-                        fields = Self::skip_string(fields);
-                    },
+            while count > 0 {
+                let mut name = String::new();
+                let mut next = None;
 
-                    Self::TYPE_BOOL => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "u32", 4);
-                    },
-
-                    Self::TYPE_UTF16_CODE_UNIT => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "u16", 2);
-                    },
-
-                    Self::TYPE_SBYTE => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "s8", 1);
-                    },
-
-                    Self::TYPE_BYTE => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "u8", 1);
-                    },
-
-                    Self::TYPE_INT16 => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "s16", 2);
-                    },
-
-                    Self::TYPE_UINT16 => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "u16", 2);
-                    },
-
-                    Self::TYPE_INT32 => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "s32", 4);
-                    },
-
-                    Self::TYPE_UINT32 => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "u32", 4);
-                    },
-
-                    Self::TYPE_INT64 => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "s64", 8);
-                    },
-
-                    Self::TYPE_UINT64 => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "u64", 8);
-                    },
-
-                    Self::TYPE_SINGLE => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "float", 4);
-                    },
-
-                    Self::TYPE_DOUBLE => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "double", 8);
-                    },
-
-                    Self::TYPE_DATE_TIME => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "u8", 16);
-                    },
-
-                    Self::TYPE_GUID => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "u8", 16);
-                    },
-
-                    Self::TYPE_UTF16_STRING => {
-                        let mut name = String::new();
-                        fields = Self::read_string(fields, &mut name);
-                        Self::append_field(format, name, "string", 0);
-                    },
-
-                    _ => {
-                        /* Unknown, force no more. */
-                        fields = &[];
+                if v2 {
+                    if fields.len() < 4 {
                         break;
-                    },
+                    }
+
+                    if let Some(size) = Self::read_int(fields) {
+                        let size = size as usize;
+
+                        if size > fields.len() {
+                            break;
+                        }
+
+                        next = Some(&fields[size..]);
+                        fields = &fields[4..];
+
+                        fields = Self::read_string(fields, &mut name);
+                    } else {
+                        break;
+                    }
+                }
+
+                if let Some(field_type) = Self::parse_type(fields) {
+                    fields = &fields[4..];
+
+                    match field_type.type_name {
+                        "object" => {
+                            fields = Self::parse_object(fields, format, depth+1);
+
+                            if !v2 {
+                                fields = Self::read_string(fields, &mut name);
+                            }
+                        },
+
+                        "array" => {
+                            if let Some(array_type) = Self::parse_type(fields) {
+                                fields = &fields[4..];
+
+                                match array_type.type_name {
+                                    "object" | "array" => {
+                                        /*
+                                         * Currently don't support complex array types:
+                                         * Allowing a field to have it's own format would
+                                         * allow for this. We would then parse a new
+                                         * format via parse_object and add it to the field.
+                                         */
+                                        return &[];
+                                    },
+                                    _ => {
+                                        let type_name = format!("__dyn_array {}", array_type.type_name);
+
+                                        Self::append_field(format, name, &type_name, 0);
+                                    },
+                                }
+                            } else {
+                                break;
+                            }
+                        },
+
+                        _ => {
+                            if !v2 {
+                                fields = Self::read_string(fields, &mut name);
+                            }
+
+                            Self::append_field(format, name, field_type.type_name, field_type.size);
+                        },
+                    }
+
+                    if let Some(next) = next {
+                        fields = next;
+                    }
+                } else {
+                    break;
                 }
 
                 count -= 1;
