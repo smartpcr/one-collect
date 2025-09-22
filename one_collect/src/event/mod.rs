@@ -333,6 +333,8 @@ pub enum LocationType {
     DynRelative,
     /// Represents a dynamic location, with the position being an absolute index into the data.
     DynAbsolute,
+    /// Represents a static location that holds a length prefixed array.
+    StaticLenPrefixArray,
     /// Represents a static location that holds a UTF16 string.
     StaticUTF16String,
 }
@@ -541,6 +543,26 @@ impl EventFormat {
                 &slice[0..len]
             },
 
+            LocationType::StaticLenPrefixArray => {
+                if offset > data.len() {
+                    return EMPTY;
+                }
+
+                let slice = &data[offset..];
+
+                if slice.len() <= 2 {
+                    /* Out of bounds */
+                    return EMPTY;
+                }
+
+                let len = u16::from_ne_bytes(
+                    slice[0..2].try_into().unwrap()) as usize;
+
+                let bytes = len * size;
+
+                &slice[2..2+bytes]
+            },
+
             LocationType::DynRelative => {
                 todo!("Need to support relative location");
             },
@@ -560,9 +582,16 @@ impl EventFormat {
         let mut skip_offset = 0;
 
         for skip in skips {
+            let start = skip_offset+skip.offset;
+
+            if start > data.len() {
+                /* Out of bounds */
+                return EMPTY;
+            }
+
             match skip.loc_type {
                 LocationType::StaticString => {
-                    for b in &data[skip_offset+skip.offset..] {
+                    for b in &data[start..] {
                         skip_offset += 1;
 
                         if *b == 0 {
@@ -572,7 +601,7 @@ impl EventFormat {
                 },
 
                 LocationType::StaticUTF16String => {
-                    let slice = &data[skip_offset+skip.offset..];
+                    let slice = &data[start..];
                     let chunks = slice.chunks_exact(2);
 
                     for chunk in chunks {
@@ -582,6 +611,22 @@ impl EventFormat {
                             break;
                         }
                     }
+                },
+
+                LocationType::StaticLenPrefixArray => {
+                    let size = &data[start..];
+                    let element_size = skip.size.unwrap_or(0) as usize;
+
+                    if size.len() < 2 {
+                        /* Out of bounds */
+                        return EMPTY;
+                    }
+
+                    let len = u16::from_ne_bytes(
+                        size[0..2].try_into().unwrap()) as usize;
+
+                    skip_offset += 2;
+                    skip_offset += element_size * len;
                 },
 
                 _ => {
@@ -1074,6 +1119,38 @@ impl EventFormat {
         None
     }
 
+    /// Tries to return the size of an element of a field.
+    ///
+    /// # Arguments
+    ///
+    /// * `type_name` - The type of the field to get the size for.
+    pub fn try_get_element_size(type_name: &str) -> Option<u16> {
+        let mut split = type_name.split_whitespace();
+        let mut first = split.next();
+
+        if first.unwrap_or("") == "__dyn_array" {
+            first = split.next();
+        }
+
+        match first {
+            Some(mut type_name) => {
+                /* Handle unsigned char, etc. */
+                if type_name == "unsigned" {
+                    type_name = split.next().unwrap_or("");
+                }
+
+                match type_name {
+                    "u8" | "s8" | "char" => Some(1),
+                    "u16" | "s16" | "short" => Some(2),
+                    "u32" | "s32" | "int" => Some(4),
+                    "u64" | "s64" | "long" => Some(8),
+                    _ => { None },
+                }
+            },
+            None => None,
+        }
+    }
+
     /// Tries to return a closure capable of getting the field data
     /// dynamically.
     ///
@@ -1089,8 +1166,21 @@ impl EventFormat {
 
         for field in &self.fields {
             if field.name == field_name {
-                let size = field.size;
+                let mut size = field.size;
                 let location = field.location;
+
+                if size == 0 {
+                    if location == LocationType::StaticLenPrefixArray {
+                        let element_size = Self::try_get_element_size(
+                            &field.type_name);
+
+                        if element_size.is_none() {
+                            return None;
+                        }
+
+                        size = element_size.unwrap() as usize;
+                    }
+                }
 
                 if skips.is_empty() {
                     /* Use direct field offset to allow for gaps */
@@ -1125,7 +1215,24 @@ impl EventFormat {
                         /* Known skippable types */
                         skips.push(FieldSkip {
                             loc_type: field.location,
-                            offset
+                            size: None,
+                            offset,
+                        });
+                    },
+
+                    LocationType::StaticLenPrefixArray => {
+                        let element_size = Self::try_get_element_size(
+                            &field.type_name);
+
+                        if element_size.is_none() {
+                            /* Cannot determine element size */
+                            return None;
+                        }
+
+                        skips.push(FieldSkip {
+                            loc_type: field.location,
+                            size: element_size,
+                            offset,
                         });
                     },
 
@@ -1469,6 +1576,7 @@ const EVENT_FLAG_PROXY:u64 = 1u64 << 1;
 struct FieldSkip {
     loc_type: LocationType,
     offset: usize,
+    size: Option<u16>,
 }
 
 /// `Event` represents a system event in the context of event collection and profiling.
