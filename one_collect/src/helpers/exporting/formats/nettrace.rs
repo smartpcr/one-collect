@@ -40,6 +40,7 @@ struct SavedLabelKey {
 
 struct NetTraceField<'a> {
     type_id: u8,
+    element_type_id: Option<u8>,
     name: &'a str,
 }
 
@@ -53,71 +54,85 @@ const TYPE_ID_UINT64: u8 = 12;
 const TYPE_ID_SINGLE: u8 = 13;
 const TYPE_ID_DOUBLE: u8 = 14;
 const TYPE_ID_NULL_UTF16_STRING: u8 = 18;
+const TYPE_ID_ARRAY: u8 = 19;
 const TYPE_ID_VARUINT: u8 = 21;
 const TYPE_ID_UTF8: u8 = 23;
 
 const VALUE_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_VARUINT,
+    element_type_id: None,
     name: "Value",
 };
 
 const ID_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_VARUINT,
+    element_type_id: None,
     name: "Id",
 };
 
 const NAME_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_UTF8,
+    element_type_id: None,
     name: "Name",
 };
 
 const NAMESPACE_NAME_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_UTF8,
+    element_type_id: None,
     name: "NamespaceName",
 };
 
 const FILE_NAME_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_UTF8,
+    element_type_id: None,
     name: "FileName",
 };
 
 const SYMBOL_META_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_UTF8,
+    element_type_id: None,
     name: "SymbolMetadata",
 };
 
 const VERSION_META_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_UTF8,
+    element_type_id: None,
     name: "VersionMetadata",
 };
 
 const NAMESPACE_ID_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_VARUINT,
+    element_type_id: None,
     name: "NamespaceId",
 };
 
 const MAPPING_ID_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_VARUINT,
+    element_type_id: None,
     name: "MappingId",
 };
 
 const META_ID_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_VARUINT,
+    element_type_id: None,
     name: "MetadataId",
 };
 
 const START_ADDRESS_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_VARUINT,
+    element_type_id: None,
     name: "StartAddress",
 };
 
 const END_ADDRESS_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_VARUINT,
+    element_type_id: None,
     name: "EndAddress",
 };
 
 const FILE_OFFSET_FIELD: NetTraceField = NetTraceField {
     type_id: TYPE_ID_VARUINT,
+    element_type_id: None,
     name: "FileOffset",
 };
 
@@ -363,11 +378,19 @@ impl NetTraceWriter {
         self.buffer.write_u16(fields.len() as u16)?;
 
         for field in fields {
-            let size = self.buffer.size_utf8(field.name) + 1;
+            let mut size = self.buffer.size_utf8(field.name) + 1;
+
+            if field.type_id == TYPE_ID_ARRAY {
+                size += 1;
+            }
 
             self.buffer.write_u16(size as u16)?;
             self.buffer.write_utf8(field.name)?;
             self.buffer.write_u8(field.type_id)?;
+
+            if field.type_id == TYPE_ID_ARRAY {
+                self.buffer.write_u8(field.element_type_id.unwrap_or(0))?;
+            }
         }
 
         /* OptionalMetadata */
@@ -841,14 +864,71 @@ impl NetTraceWriter {
         Ok(())
     }
 
+    fn event_field_to_element_type(field: &EventField) -> Option<u8> {
+        let mut split = field.type_name.split_whitespace();
+        let mut first = split.next().unwrap_or("");
+
+        if first == "__dyn_array" {
+            first = split.next().unwrap_or("");
+        }
+
+        match first {
+            /* Byte */
+            "u8" => { Some(TYPE_ID_BYTE) },
+            "s8" => { Some(TYPE_ID_BYTE) },
+            "char" => { Some(TYPE_ID_BYTE) },
+
+            /* INT16 */
+            "u16" => { Some(TYPE_ID_UINT16) },
+            "s16" => { Some(TYPE_ID_INT16) },
+            "short" => { Some(TYPE_ID_INT16) },
+
+            /* INT32 */
+            "u32" => { Some(TYPE_ID_UINT32) },
+            "s32" => { Some(TYPE_ID_INT32) },
+            "int" => { Some(TYPE_ID_INT32) },
+
+            /* INT64 */
+            "u64" => { Some(TYPE_ID_UINT64) },
+            "s64" => { Some(TYPE_ID_INT64) },
+            "long" => { Some(TYPE_ID_INT64) },
+
+            /* SINGLE */
+            "float" => { Some(TYPE_ID_SINGLE) },
+
+            /* DOUBLE */
+            "double" => { Some(TYPE_ID_DOUBLE) },
+
+            /* UNSIGNED */
+            "unsigned" => {
+                /* Ambigious, use size */
+                match field.size {
+                    1 => { Some(TYPE_ID_BYTE) },
+                    2 => { Some(TYPE_ID_UINT16) },
+                    4 => { Some(TYPE_ID_UINT32) },
+                    8 => { Some(TYPE_ID_UINT64) },
+                    _ => { None },
+                }
+            },
+
+            /* Linux Variable Data */
+            "__rel_loc" => { Some(TYPE_ID_UINT32) },
+            "__data_loc" => { Some(TYPE_ID_UINT32) },
+
+            /* Windows UTF16 string */
+            "string" => { Some(TYPE_ID_NULL_UTF16_STRING) },
+
+            /* Unhandled */
+            _ => { None },
+        }
+    }
+
     fn event_field_to_type(field: &EventField) -> Option<u8> {
-        let type_id;
-
         if field.location == LocationType::StaticUTF16String {
-            type_id = TYPE_ID_NULL_UTF16_STRING;
+            Some(TYPE_ID_NULL_UTF16_STRING)
+        } else if field.location == LocationType::StaticLenPrefixArray {
+            Some(TYPE_ID_ARRAY)
         } else {
-            let first_word = field.type_name.split_whitespace().next();
-
             if field.type_name.ends_with("]") {
                 if let Some(index) = field.type_name.rfind('[') {
                     if index != field.type_name.len() - 2 {
@@ -862,58 +942,8 @@ impl NetTraceWriter {
                 }
             }
 
-            type_id = match first_word {
-                /* Byte */
-                Some("u8") => { TYPE_ID_BYTE },
-                Some("s8") => { TYPE_ID_BYTE },
-                Some("char") => { TYPE_ID_BYTE },
-
-                /* INT16 */
-                Some("u16") => { TYPE_ID_UINT16 },
-                Some("s16") => { TYPE_ID_INT16 },
-                Some("short") => { TYPE_ID_INT16 },
-
-                /* INT32 */
-                Some("u32") => { TYPE_ID_UINT32 },
-                Some("s32") => { TYPE_ID_INT32 },
-                Some("int") => { TYPE_ID_INT32 },
-
-                /* INT64 */
-                Some("u64") => { TYPE_ID_UINT64 },
-                Some("s64") => { TYPE_ID_INT64 },
-                Some("long") => { TYPE_ID_INT64 },
-
-                /* SINGLE */
-                Some("float") => { TYPE_ID_SINGLE },
-
-                /* DOUBLE */
-                Some("double") => { TYPE_ID_DOUBLE },
-
-                /* UNSIGNED */
-                Some("unsigned") => {
-                    /* Ambigious, use size */
-                    match field.size {
-                        1 => { TYPE_ID_BYTE },
-                        2 => { TYPE_ID_UINT16 },
-                        4 => { TYPE_ID_UINT32 },
-                        8 => { TYPE_ID_UINT64 },
-                        _ => { return None; },
-                    }
-                },
-
-                /* Linux Variable Data */
-                Some("__rel_loc") => { TYPE_ID_UINT32 },
-                Some("__data_loc") => { TYPE_ID_UINT32 },
-
-                /* Windows UTF16 string */
-                Some("string") => { TYPE_ID_NULL_UTF16_STRING },
-
-                /* Unhandled */
-                _ => { return None; },
-            };
+            Self::event_field_to_element_type(field)
         }
-
-        Some(type_id)
     }
 
     fn write_metadata_object(
@@ -966,8 +996,14 @@ impl NetTraceWriter {
             for field in record_type.format().fields() {
                 match Self::event_field_to_type(field) {
                     Some(type_id) => {
+                        let element_type_id = match type_id {
+                            TYPE_ID_ARRAY => Self::event_field_to_element_type(field),
+                            _ => None,
+                        };
+
                         record_fields.push(NetTraceField {
                             type_id,
+                            element_type_id,
                             name: &field.name,
                         });
                     },
