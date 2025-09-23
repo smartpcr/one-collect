@@ -57,6 +57,15 @@ impl Recorder {
             settings = settings.with_cswitches();
         }
 
+        // Page faults.
+        if self.args.soft_page_faults() {
+            settings = settings.with_soft_page_faults();
+        }
+
+        if self.args.hard_page_faults() {
+            settings = settings.with_hard_page_faults();
+        }
+
         let continue_recording = Arc::new(AtomicBool::new(true));
 
         // Live.

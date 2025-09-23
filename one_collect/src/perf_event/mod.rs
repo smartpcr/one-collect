@@ -239,6 +239,8 @@ pub struct PerfSession {
     mmap_event: Event,
     lost_samples_event: Event,
     cswitch_event: Event,
+    soft_page_fault_event: Event,
+    hard_page_fault_event: Event,
     drop_event: Event,
 
     /* BPF */
@@ -302,6 +304,8 @@ impl PerfSession {
             /* Events */
             cpu_profile_event: Event::new(0, "__cpu_profile".into()),
             cswitch_profile_event: Event::new(0, "__cswitch_profile".into()),
+            soft_page_fault_event: Event::new(0, "__soft_page_fault".into()),
+            hard_page_fault_event: Event::new(0, "__hard_page_fault".into()),
             lost_event: events::lost(),
             comm_event: events::comm(),
             exit_event: events::exit(),
@@ -342,6 +346,14 @@ impl PerfSession {
 
     pub fn cswitch_profile_event(&mut self) -> &mut Event {
         &mut self.cswitch_profile_event
+    }
+
+    pub fn soft_page_fault_event(&mut self) -> &mut Event {
+        &mut self.soft_page_fault_event
+    }
+
+    pub fn hard_page_fault_event(&mut self) -> &mut Event {
+        &mut self.hard_page_fault_event
     }
 
     pub fn lost_event(&mut self) -> &mut Event {
@@ -855,6 +867,26 @@ impl PerfSession {
                                         &mut self.errors);
 
                                     self.log_errors(&self.cswitch_profile_event);
+                                },
+
+                                /* SOFT PAGE FAULT */
+                                PERF_COUNT_SW_PAGE_FAULTS_MIN => {
+                                    self.soft_page_fault_event.process(
+                                        perf_data.raw_data,
+                                        perf_data.raw_data,
+                                        &mut self.errors);
+
+                                    self.log_errors(&self.soft_page_fault_event);
+                                },
+
+                                /* HARD PAGE FAULT */
+                                PERF_COUNT_SW_PAGE_FAULTS_MAJ => {
+                                    self.hard_page_fault_event.process(
+                                        perf_data.raw_data,
+                                        perf_data.raw_data,
+                                        &mut self.errors);
+
+                                    self.log_errors(&self.hard_page_fault_event);
                                 },
 
                                 /* Unsupported */

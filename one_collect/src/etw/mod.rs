@@ -312,6 +312,12 @@ const REAL_SYSTEM_THREAD_PROVIDER: Guid = Guid::from_u128(0x3d6fa8d1_fe05_11d0_9
 const SYSTEM_SCHEDULER_KW_DISPATCHER: u64 = 2u64;
 const SYSTEM_SCHEDULER_KW_CONTEXT_SWITCH: u64 = 512u64;
 
+const SYSTEM_MEMORY_PROVIDER: Guid = Guid::from_u128(0x82958ca9_b6cd_47f8_a3a8_03ae85a4bc24);
+const REAL_SYSTEM_PAGE_FAULT_PROVIDER: Guid = Guid::from_u128(0x3d6fa8d3_fe05_11d0_9dda_00c04fd7ba7c);
+
+const SYSTEM_MEMORY_KW_HARD_FAULTS: u64 = 2u64;
+const SYSTEM_MEMORY_KW_ALL_FAULTS: u64 = 4u64;
+
 impl EtwSession {
     pub fn new() -> Self {
         Self {
@@ -766,6 +772,97 @@ impl EtwSession {
             },
             50,
             |id| events::ready_thread(id, "Thread::Ready"))
+    }
+
+    pub fn hard_page_fault_event(
+        &mut self,
+        properties: Option<u32>) -> &mut Event {
+        self.requires_elevation();
+
+        if let Some(properties) = properties {
+            if properties & PROPERTY_STACK_TRACE != 0 {
+                self.add_kernel_callstack(
+                    REAL_SYSTEM_PAGE_FAULT_PROVIDER,
+                    32);
+            }
+        }
+
+        self.enable_singleton_event(
+            SYSTEM_MEMORY_PROVIDER,
+            Some(REAL_SYSTEM_PAGE_FAULT_PROVIDER),
+            |provider| {
+                provider.ensure_no_filtering();
+                provider.ensure_keyword(SYSTEM_MEMORY_KW_HARD_FAULTS);
+            },
+            32,
+            |id| events::hard_page_fault(id, "Memory::HardPageFault"))
+    }
+
+    pub fn soft_page_fault_events<'a>(
+        &'a mut self,
+        properties: Option<u32>,
+        mut closure: impl FnMut(&mut Event)) {
+        self.requires_elevation();
+
+        if let Some(properties) = properties {
+            if properties & PROPERTY_STACK_TRACE != 0 {
+                self.add_kernel_callstack(
+                    REAL_SYSTEM_PAGE_FAULT_PROVIDER,
+                    10);
+
+                self.add_kernel_callstack(
+                    REAL_SYSTEM_PAGE_FAULT_PROVIDER,
+                    11);
+
+                self.add_kernel_callstack(
+                    REAL_SYSTEM_PAGE_FAULT_PROVIDER,
+                    12);
+
+                self.add_kernel_callstack(
+                    REAL_SYSTEM_PAGE_FAULT_PROVIDER,
+                    13);
+            }
+        }
+
+        closure(self.enable_singleton_event(
+            SYSTEM_MEMORY_PROVIDER,
+            Some(REAL_SYSTEM_PAGE_FAULT_PROVIDER),
+            |provider| {
+                provider.ensure_no_filtering();
+                provider.ensure_keyword(SYSTEM_MEMORY_KW_ALL_FAULTS);
+            },
+            10,
+            |id| events::soft_page_fault(id, "Memory::TransitionFault")));
+
+        closure(self.enable_singleton_event(
+            SYSTEM_MEMORY_PROVIDER,
+            Some(REAL_SYSTEM_PAGE_FAULT_PROVIDER),
+            |provider| {
+                provider.ensure_no_filtering();
+                provider.ensure_keyword(SYSTEM_MEMORY_KW_ALL_FAULTS);
+            },
+            11,
+            |id| events::soft_page_fault(id, "Memory::DemandZeroFault")));
+
+        closure(self.enable_singleton_event(
+            SYSTEM_MEMORY_PROVIDER,
+            Some(REAL_SYSTEM_PAGE_FAULT_PROVIDER),
+            |provider| {
+                provider.ensure_no_filtering();
+                provider.ensure_keyword(SYSTEM_MEMORY_KW_ALL_FAULTS);
+            },
+            12,
+            |id| events::soft_page_fault(id, "Memory::CopyOnWriteFault")));
+
+        closure(self.enable_singleton_event(
+            SYSTEM_MEMORY_PROVIDER,
+            Some(REAL_SYSTEM_PAGE_FAULT_PROVIDER),
+            |provider| {
+                provider.ensure_no_filtering();
+                provider.ensure_keyword(SYSTEM_MEMORY_KW_ALL_FAULTS);
+            },
+            13,
+            |id| events::soft_page_fault(id, "Memory::GuardPageFault")));
     }
 
     pub fn cswitch_event(

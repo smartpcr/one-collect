@@ -153,6 +153,7 @@ fn perf_event_open(
 
 pub struct Profiling;
 pub struct ContextSwitches;
+pub struct PageFaults;
 pub struct Tracepoint;
 pub struct Kernel;
 pub struct Bpf;
@@ -203,6 +204,32 @@ impl RingBufBuilder {
         RingBufBuilder::<ContextSwitches> {
             attributes,
             _type: PhantomData::<ContextSwitches>,
+        }
+    }
+
+    pub fn for_soft_page_faults() -> RingBufBuilder<PageFaults> {
+        let mut attributes = Self::common_attributes();
+
+        attributes.event_type = PERF_TYPE_SOFTWARE;
+        attributes.config = PERF_COUNT_SW_PAGE_FAULTS_MIN;
+        attributes.sample_period_freq = 1;
+
+        RingBufBuilder::<PageFaults> {
+            attributes,
+            _type: PhantomData::<PageFaults>,
+        }
+    }
+
+    pub fn for_hard_page_faults() -> RingBufBuilder<PageFaults> {
+        let mut attributes = Self::common_attributes();
+
+        attributes.event_type = PERF_TYPE_SOFTWARE;
+        attributes.config = PERF_COUNT_SW_PAGE_FAULTS_MAJ;
+        attributes.sample_period_freq = 1;
+
+        RingBufBuilder::<PageFaults> {
+            attributes,
+            _type: PhantomData::<PageFaults>,
         }
     }
 
@@ -284,6 +311,25 @@ impl RingBufOptions for RingBufBuilder<ContextSwitches> {
 }
 
 impl RingBufBuilder<ContextSwitches> {
+    pub(crate) fn build(&self) -> CommonRingBuf {
+        CommonRingBuf::new(self.attributes)
+    }
+}
+
+impl RingBufOptions for RingBufBuilder<PageFaults> {
+    fn clone_options(&self) -> Self {
+        Self {
+            attributes: self.attributes,
+            _type: self._type,
+        }
+    }
+
+    fn attributes_mut(&mut self) -> &mut perf_event_attr {
+        &mut self.attributes
+    }
+}
+
+impl RingBufBuilder<PageFaults> {
     pub(crate) fn build(&self) -> CommonRingBuf {
         CommonRingBuf::new(self.attributes)
     }
