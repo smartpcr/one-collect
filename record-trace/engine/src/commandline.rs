@@ -25,6 +25,12 @@ struct Args {
     #[arg(long, help = "Capture context switches")]
     off_cpu: bool,
 
+    #[arg(long, help = "Capture soft page faults")]
+    soft_page_faults: bool,
+
+    #[arg(long, help = "Capture hard page faults")]
+    hard_page_faults: bool,
+
     #[arg(long, help = "Display samples live")]
     live: bool,
 
@@ -59,6 +65,8 @@ pub struct RecordArgs {
     format: Format,
     on_cpu: bool,
     off_cpu: bool,
+    soft_page_faults: bool,
+    hard_page_faults: bool,
     live: bool,
     target_pids: Option<Vec<i32>>,
     script: Option<String>,
@@ -97,13 +105,17 @@ impl RecordArgs {
             format: command_args.format,
             on_cpu: command_args.on_cpu,
             off_cpu: command_args.off_cpu,
+            soft_page_faults: command_args.soft_page_faults,
+            hard_page_faults: command_args.hard_page_faults,
             live: command_args.live,
             target_pids: command_args.target_pids,
             script,
         };
 
         // Cross-argument validation.
-        if !args.on_cpu && !args.off_cpu && args.script.is_none() {
+        if !args.on_cpu && !args.off_cpu &&
+            !args.soft_page_faults && !args.hard_page_faults &&
+            args.script.is_none() {
             eprintln!("No events or scripts selected. Exiting.");
             process::exit(1);
         }
@@ -128,6 +140,14 @@ impl RecordArgs {
 
     pub (crate) fn off_cpu(&self) -> bool {
         self.off_cpu
+    }
+
+    pub (crate) fn soft_page_faults(&self) -> bool {
+        self.soft_page_faults
+    }
+
+    pub (crate) fn hard_page_faults(&self) -> bool {
+        self.hard_page_faults
     }
 
     pub (crate) fn live(&self) -> bool {

@@ -37,6 +37,8 @@ pub struct RingBufSessionBuilder {
     event_builder: Option<RingBufBuilder<Tracepoint>>,
     profiling_builder: Option<RingBufBuilder<Profiling>>,
     cswitch_builder: Option<RingBufBuilder<ContextSwitches>>,
+    soft_page_faults_builder: Option<RingBufBuilder<PageFaults>>,
+    hard_page_faults_builder: Option<RingBufBuilder<PageFaults>>,
     bpf_builder: Option<RingBufBuilder<Bpf>>,
     hooks: Option<Vec<RingBufSessionHook>>,
 }
@@ -56,6 +58,8 @@ impl RingBufSessionBuilder {
             event_builder: None,
             profiling_builder: None,
             cswitch_builder: None,
+            soft_page_faults_builder: None,
+            hard_page_faults_builder: None,
             bpf_builder: None,
             hooks: None,
         }
@@ -84,6 +88,8 @@ impl RingBufSessionBuilder {
             profiling_builder: self.profiling_builder.take(),
             cswitch_builder: self.cswitch_builder.take(),
             bpf_builder: self.bpf_builder.take(),
+            soft_page_faults_builder: self.soft_page_faults_builder.take(),
+            hard_page_faults_builder: self.hard_page_faults_builder.take(),
             hooks: self.hooks.take(),
         }
     }
@@ -99,6 +105,8 @@ impl RingBufSessionBuilder {
             profiling_builder: self.profiling_builder.take(),
             cswitch_builder: self.cswitch_builder.take(),
             bpf_builder: self.bpf_builder.take(),
+            soft_page_faults_builder: self.soft_page_faults_builder.take(),
+            hard_page_faults_builder: self.hard_page_faults_builder.take(),
             hooks: self.hooks.take(),
         }
     }
@@ -114,6 +122,8 @@ impl RingBufSessionBuilder {
             profiling_builder: self.profiling_builder.take(),
             cswitch_builder: self.cswitch_builder.take(),
             bpf_builder: self.bpf_builder.take(),
+            soft_page_faults_builder: self.soft_page_faults_builder.take(),
+            hard_page_faults_builder: self.hard_page_faults_builder.take(),
             hooks: self.hooks.take(),
         }
     }
@@ -140,6 +150,8 @@ impl RingBufSessionBuilder {
             profiling_builder: self.profiling_builder.take(),
             cswitch_builder: self.cswitch_builder.take(),
             bpf_builder: self.bpf_builder.take(),
+            soft_page_faults_builder: self.soft_page_faults_builder.take(),
+            hard_page_faults_builder: self.hard_page_faults_builder.take(),
             hooks: self.hooks.take(),
         }
     }
@@ -166,6 +178,8 @@ impl RingBufSessionBuilder {
             profiling_builder: Some(builder),
             cswitch_builder: self.cswitch_builder.take(),
             bpf_builder: self.bpf_builder.take(),
+            soft_page_faults_builder: self.soft_page_faults_builder.take(),
+            hard_page_faults_builder: self.hard_page_faults_builder.take(),
             hooks: self.hooks.take(),
         }
     }
@@ -192,6 +206,8 @@ impl RingBufSessionBuilder {
             profiling_builder: self.profiling_builder.take(),
             cswitch_builder: Some(builder),
             bpf_builder: self.bpf_builder.take(),
+            soft_page_faults_builder: self.soft_page_faults_builder.take(),
+            hard_page_faults_builder: self.hard_page_faults_builder.take(),
             hooks: self.hooks.take(),
         }
     }
@@ -218,6 +234,8 @@ impl RingBufSessionBuilder {
             profiling_builder: self.profiling_builder.take(),
             cswitch_builder: self.cswitch_builder.take(),
             bpf_builder: Some(builder),
+            soft_page_faults_builder: self.soft_page_faults_builder.take(),
+            hard_page_faults_builder: self.hard_page_faults_builder.take(),
             hooks: self.hooks.take(),
         }
     }
@@ -231,6 +249,62 @@ impl RingBufSessionBuilder {
         &mut self,
         builder: RingBufBuilder<Bpf>) -> Option<RingBufBuilder<Bpf>> {
         self.bpf_builder.replace(builder)
+    }
+
+    pub fn with_soft_page_faults_events(
+        &mut self,
+        builder: RingBufBuilder<PageFaults>) -> Self {
+        Self {
+            pages: self.pages,
+            target_pids: self.target_pids.take(),
+            kernel_builder: self.kernel_builder.take(),
+            event_builder: self.event_builder.take(),
+            profiling_builder: self.profiling_builder.take(),
+            cswitch_builder: self.cswitch_builder.take(),
+            bpf_builder: self.bpf_builder.take(),
+            soft_page_faults_builder: Some(builder),
+            hard_page_faults_builder: self.hard_page_faults_builder.take(),
+            hooks: self.hooks.take(),
+        }
+    }
+
+    pub fn take_soft_page_faults_events(
+        &mut self) -> Option<RingBufBuilder<PageFaults>> {
+        self.soft_page_faults_builder.take()
+    }
+
+    pub fn replace_soft_page_faults_events(
+        &mut self,
+        builder: RingBufBuilder<PageFaults>) -> Option<RingBufBuilder<PageFaults>> {
+        self.soft_page_faults_builder.replace(builder)
+    }
+
+    pub fn with_hard_page_faults_events(
+        &mut self,
+        builder: RingBufBuilder<PageFaults>) -> Self {
+        Self {
+            pages: self.pages,
+            target_pids: self.target_pids.take(),
+            kernel_builder: self.kernel_builder.take(),
+            event_builder: self.event_builder.take(),
+            profiling_builder: self.profiling_builder.take(),
+            cswitch_builder: self.cswitch_builder.take(),
+            bpf_builder: self.bpf_builder.take(),
+            soft_page_faults_builder: self.soft_page_faults_builder.take(),
+            hard_page_faults_builder: Some(builder),
+            hooks: self.hooks.take(),
+        }
+    }
+
+    pub fn take_hard_page_faults_events(
+        &mut self) -> Option<RingBufBuilder<PageFaults>> {
+        self.hard_page_faults_builder.take()
+    }
+
+    pub fn replace_hard_page_faults_events(
+        &mut self,
+        builder: RingBufBuilder<PageFaults>) -> Option<RingBufBuilder<PageFaults>> {
+        self.hard_page_faults_builder.replace(builder)
     }
 
     pub fn with_hooks(
@@ -252,6 +326,8 @@ impl RingBufSessionBuilder {
             profiling_builder: self.profiling_builder.take(),
             cswitch_builder: self.cswitch_builder.take(),
             bpf_builder: self.bpf_builder.take(),
+            soft_page_faults_builder: self.soft_page_faults_builder.take(),
+            hard_page_faults_builder: self.hard_page_faults_builder.take(),
             hooks: Some(hooks),
         }
     }
@@ -274,7 +350,9 @@ impl RingBufSessionBuilder {
             self.event_builder.take(),
             self.profiling_builder.take(),
             self.cswitch_builder.take(),
-            self.bpf_builder.take());
+            self.bpf_builder.take(),
+            self.soft_page_faults_builder.take(),
+            self.hard_page_faults_builder.take());
 
         source.build()?;
 
@@ -306,6 +384,8 @@ pub struct RingBufDataSource {
     profiling_builder: Option<RingBufBuilder<Profiling>>,
     cswitch_builder: Option<RingBufBuilder<ContextSwitches>>,
     bpf_builder: Option<RingBufBuilder<Bpf>>,
+    soft_page_faults_builder: Option<RingBufBuilder<PageFaults>>,
+    hard_page_faults_builder: Option<RingBufBuilder<PageFaults>>,
     next_time: Option<u64>,
     oldest_cpu: Option<usize>,
 }
@@ -318,7 +398,9 @@ impl RingBufDataSource {
         event_builder: Option<RingBufBuilder<Tracepoint>>,
         profiling_builder: Option<RingBufBuilder<Profiling>>,
         cswitch_builder: Option<RingBufBuilder<ContextSwitches>>,
-        bpf_builder: Option<RingBufBuilder<Bpf>>) -> Self {
+        bpf_builder: Option<RingBufBuilder<Bpf>>,
+        soft_page_faults_builder: Option<RingBufBuilder<PageFaults>>,
+        hard_page_faults_builder: Option<RingBufBuilder<PageFaults>>) -> Self {
         Self {
             readers: Vec::new(),
             cursors: Vec::new(),
@@ -332,6 +414,8 @@ impl RingBufDataSource {
             profiling_builder,
             cswitch_builder,
             bpf_builder,
+            soft_page_faults_builder,
+            hard_page_faults_builder,
             next_time: None,
             oldest_cpu: None,
             enabled: false,
@@ -459,6 +543,51 @@ impl RingBufDataSource {
         /* Add in cswitch samples and redirect to kernel outputs */
         if let Some(cswitch_builder) = self.cswitch_builder.as_mut() {
             let common = cswitch_builder.build();
+
+            if pids.is_empty() {
+                Self::add_cpu_bufs(
+                    None,
+                    &self.leader_ids,
+                    &mut self.ring_bufs,
+                    &common,
+                    None)?;
+            } else {
+                for pid in pids {
+                    Self::add_cpu_bufs(
+                        Some(*pid),
+                        &self.leader_ids,
+                        &mut self.ring_bufs,
+                        &common,
+                        None)?;
+                }
+            }
+        }
+
+        /* Add in page fault samples and redirect to kernel outputs */
+        if let Some(faults_builder) = self.soft_page_faults_builder.as_mut() {
+            let common = faults_builder.build();
+
+            if pids.is_empty() {
+                Self::add_cpu_bufs(
+                    None,
+                    &self.leader_ids,
+                    &mut self.ring_bufs,
+                    &common,
+                    None)?;
+            } else {
+                for pid in pids {
+                    Self::add_cpu_bufs(
+                        Some(*pid),
+                        &self.leader_ids,
+                        &mut self.ring_bufs,
+                        &common,
+                        None)?;
+                }
+            }
+        }
+
+        if let Some(faults_builder) = self.hard_page_faults_builder.as_mut() {
+            let common = faults_builder.build();
 
             if pids.is_empty() {
                 Self::add_cpu_bufs(

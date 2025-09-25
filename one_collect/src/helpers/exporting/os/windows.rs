@@ -191,8 +191,16 @@ struct WinCSwitch {
     end_time: u64,
 }
 
+#[derive(Default)]
+struct WinFault {
+    kind: u16,
+    cpu: u32,
+    time: u64,
+}
+
 pub(crate) struct OSExportMachine {
     cswitches: HashMap<u32, WinCSwitch>,
+    faults: HashMap<u32, WinFault>,
     pid_mapping: HashMap<u32, u32>,
     cpu_samples: Option<HashMap<CpuProfileKey, CpuProfile>>,
     global_idle_pid: u32,
@@ -203,6 +211,7 @@ impl OSExportMachine {
     pub fn new() -> Self {
         Self {
             cswitches: HashMap::new(),
+            faults: HashMap::new(),
             pid_mapping: HashMap::new(),
             cpu_samples: Some(HashMap::new()),
             global_idle_pid: 0,
@@ -279,6 +288,53 @@ impl OSExportMachine {
         }
 
         Ok(sid_size)
+    }
+
+    fn hook_fault_event(
+        kind: &str,
+        ancillary: ReadOnly<AncillaryData>,
+        event: &mut Event,
+        event_machine: Writable<ExportMachine>) {
+        let kind = event_machine.borrow_mut().sample_kind(kind);
+
+        if let Some(tid_field) = event.format().get_field_ref("TThreadId") {
+            event.add_callback(move |data| {
+                let fmt = data.format();
+                let data = data.event_data();
+
+                let cpu = ancillary.borrow().cpu();
+                let time = ancillary.borrow().time();
+                let tid = fmt.get_u32(tid_field, data)?;
+
+                /* Add fault for callstack */
+                event_machine.borrow_mut().os.faults.insert(
+                    tid,
+                    WinFault {
+                        kind,
+                        cpu,
+                        time,
+                    });
+
+                Ok(())
+            });
+        } else {
+            event.add_callback(move |data| {
+                let tid = ancillary.borrow().tid();
+                let cpu = ancillary.borrow().cpu();
+                let time = ancillary.borrow().time();
+
+                /* Add fault for callstack */
+                event_machine.borrow_mut().os.faults.insert(
+                    tid,
+                    WinFault {
+                        kind,
+                        cpu,
+                        time,
+                    });
+
+                Ok(())
+            });
+        }
     }
 
     fn hook_mmap_event(
@@ -382,6 +438,8 @@ impl OSExportMachine {
         session: &mut EtwSession) -> anyhow::Result<Writable<ExportMachine>> {
         let cpu_profiling = machine.settings.cpu_profiling;
         let cswitches = machine.settings.cswitches;
+        let soft_page_faults = machine.settings.soft_page_faults;
+        let hard_page_faults = machine.settings.hard_page_faults;
         let events = machine.settings.events.take();
 
         let empty_record_type = machine.record_type(ExportRecordType::default());
@@ -647,7 +705,7 @@ impl OSExportMachine {
                             kind,
                             callstack.frames());
 
-                        machine.process_mut(global_pid).add_sample(sample);
+                        let _ = machine.add_process_sample(global_pid, sample);
                     }
                 }
             });
@@ -686,6 +744,73 @@ impl OSExportMachine {
 
                 Ok(())
             });
+        }
+
+        /* Hook page faults */
+        if hard_page_faults || soft_page_faults {
+            /* ETW callstacks come via its own event, link them to faults */
+            let event_machine = machine.clone();
+
+            callstack_reader.add_async_frames_callback(move |callstack| {
+                let mut machine = event_machine.borrow_mut();
+
+                let tid = callstack.tid();
+
+                let info = match machine.os.faults.entry(tid) {
+                    Occupied(entry) => {
+                        let info = entry.get();
+
+                        /* Time must match to ensure correct stack */
+                        if info.time == callstack.time() {
+                            Some(entry.remove())
+                        } else {
+                            None
+                        }
+                    },
+                    _ => { None },
+                };
+
+                if let Some(info) = info {
+                    let local_pid = callstack.pid();
+                    let global_pid = machine.os.get_or_alloc_global_pid(local_pid);
+
+                    let sample = machine.make_sample(
+                        info.time,
+                        MetricValue::Count(1),
+                        tid,
+                        info.cpu as u16,
+                        info.kind,
+                        callstack.frames());
+
+                    let _ = machine.add_process_sample(global_pid, sample);
+                }
+            });
+
+            if hard_page_faults {
+                let ancillary = session.ancillary_data();
+                let event = session.hard_page_fault_event(Some(PROPERTY_STACK_TRACE));
+
+                Self::hook_fault_event(
+                    "hard_page_fault",
+                    ancillary,
+                    event,
+                    machine.clone());
+            }
+
+            if soft_page_faults {
+                let ancillary = session.ancillary_data().clone();
+                let event_machine = machine.clone();
+
+                session.soft_page_fault_events(
+                    Some(PROPERTY_STACK_TRACE),
+                    move |event| {
+                        Self::hook_fault_event(
+                            "soft_page_fault",
+                            ancillary.clone(),
+                            event,
+                            event_machine.clone());
+                    });
+            }
         }
 
         /* Hook mmap records */

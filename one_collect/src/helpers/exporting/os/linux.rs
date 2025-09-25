@@ -692,11 +692,58 @@ impl OSExportMachine {
         Ok(())
     }
 
+    fn event_sampled_count_closure(
+        machine: &Writable<ExportMachine>,
+        session: &PerfSession,
+        callstack_reader: &CallstackReader,
+        kind: &str) -> impl FnMut(&EventData) -> anyhow::Result<()> + 'static {
+        let ancillary = session.ancillary_data();
+        let time_field = session.time_data_ref();
+        let pid_field = session.pid_field_ref();
+        let tid_field = session.tid_data_ref();
+        let reader = callstack_reader.clone();
+
+        /* Get sample kind for event */
+        let kind = machine.borrow_mut().sample_kind(kind);
+
+        /* Hook event to counted sample with stack */
+        let event_machine = machine.clone();
+        let mut frames: Vec<u64> = Vec::new();
+
+        move |data| {
+            let full_data = data.full_data();
+
+            let ancillary = ancillary.borrow();
+
+            let cpu = ancillary.cpu() as u16;
+            let time = time_field.get_u64(full_data)?;
+            let pid = pid_field.get_u32(full_data)?;
+            let tid = tid_field.get_u32(full_data)?;
+
+            frames.clear();
+
+            reader.read_frames(
+                full_data,
+                &mut frames);
+
+            event_machine.borrow_mut().add_sample(
+                time,
+                MetricValue::Count(1),
+                pid,
+                tid,
+                cpu,
+                kind,
+                &frames)
+        }
+    }
+
     fn hook_to_perf_session(
         mut machine: ExportMachine,
         session: &mut PerfSession) -> anyhow::Result<Writable<ExportMachine>> {
         let cpu_profiling = machine.settings.cpu_profiling;
         let cswitches = machine.settings.cswitches;
+        let soft_page_faults = machine.settings.soft_page_faults;
+        let hard_page_faults = machine.settings.hard_page_faults;
         let events = machine.settings.events.take();
 
         let callstack_reader = match machine.settings.callstack_helper.take() {
@@ -790,45 +837,33 @@ impl OSExportMachine {
         }
 
         if cpu_profiling {
-            let ancillary = session.ancillary_data();
-            let time_field = session.time_data_ref();
-            let pid_field = session.pid_field_ref();
-            let tid_field = session.tid_data_ref();
-            let reader = callstack_reader.clone();
+            let closure = Self::event_sampled_count_closure(
+                &machine,
+                session,
+                &callstack_reader,
+                "cpu");
 
-            /* Get sample kind for CPU */
-            let kind = machine.borrow_mut().sample_kind("cpu");
+            session.cpu_profile_event().add_callback(closure);
+        }
 
-            /* Hook cpu profile event */
-            let event = session.cpu_profile_event();
-            let event_machine = machine.clone();
-            let mut frames: Vec<u64> = Vec::new();
+        if soft_page_faults {
+            let closure = Self::event_sampled_count_closure(
+                &machine,
+                session,
+                &callstack_reader,
+                "soft_page_fault");
 
-            event.add_callback(move |data| {
-                let full_data = data.full_data();
+            session.soft_page_fault_event().add_callback(closure);
+        }
 
-                let ancillary = ancillary.borrow();
+        if hard_page_faults {
+            let closure = Self::event_sampled_count_closure(
+                &machine,
+                session,
+                &callstack_reader,
+                "hard_page_fault");
 
-                let cpu = ancillary.cpu() as u16;
-                let time = time_field.get_u64(full_data)?;
-                let pid = pid_field.get_u32(full_data)?;
-                let tid = tid_field.get_u32(full_data)?;
-
-                frames.clear();
-
-                reader.read_frames(
-                    full_data,
-                    &mut frames);
-
-                event_machine.borrow_mut().add_sample(
-                    time,
-                    MetricValue::Count(1),
-                    pid,
-                    tid,
-                    cpu,
-                    kind,
-                    &frames)
-            });
+            session.hard_page_fault_event().add_callback(closure);
         }
 
         if cswitches {
@@ -939,7 +974,7 @@ impl OSExportMachine {
                                 *sample.time_mut() = start_time;
                                 *sample.value_mut() = MetricValue::Duration(duration);
 
-                                machine.process_mut(pid).add_sample(sample);
+                                let _ = machine.add_process_sample(pid, sample);
                             }
                         } else {
                             /* Switch out */
@@ -1422,6 +1457,18 @@ impl ExportBuilderHelp for RingBufSessionBuilder {
 
             builder = builder.with_cswitch_events(cswitches);
             kernel = kernel.with_cswitch_records();
+        }
+
+        if settings.soft_page_faults {
+            let faults = RingBufBuilder::for_soft_page_faults();
+
+            builder = builder.with_soft_page_faults_events(faults);
+        }
+
+        if settings.hard_page_faults {
+            let faults = RingBufBuilder::for_hard_page_faults();
+
+            builder = builder.with_hard_page_faults_events(faults);
         }
 
         if settings.events.is_some() {

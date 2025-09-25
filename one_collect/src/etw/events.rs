@@ -376,3 +376,75 @@ pub fn cswitch(
 
     event
 }
+
+pub fn hard_page_fault(
+    id: usize,
+    name: &str) -> Event {
+    let mut event = Event::new(id, name.into());
+    let mut offset: usize = 0;
+    let mut len: usize;
+
+    *event.extension_mut().provider_mut() = REAL_SYSTEM_PAGE_FAULT_PROVIDER;
+
+    let format = event.format_mut();
+
+    len = 8;
+    format.add_field(EventField::new(
+        "InitialTime".into(), "u64".into(),
+        LocationType::Static, offset, len));
+    offset += len;
+
+    format.add_field(EventField::new(
+        "ReadOffset".into(), "u64".into(),
+        LocationType::Static, offset, len));
+    offset += len;
+
+    format.add_field(EventField::new(
+        "VirtualAddress".into(), "u64".into(),
+        LocationType::Static, offset, len));
+    offset += len;
+
+    format.add_field(EventField::new(
+        "FileObject".into(), "u64".into(),
+        LocationType::Static, offset, len));
+    offset += len;
+
+    len = 4;
+    format.add_field(EventField::new(
+        "TThreadId".into(), "u32".into(),
+        LocationType::Static, offset, len));
+    offset += len;
+
+    format.add_field(EventField::new(
+        "ByteCount".into(), "u32".into(),
+        LocationType::Static, offset, len));
+
+    event.set_no_callstack_flag();
+
+    event
+}
+
+pub fn soft_page_fault(
+    id: usize,
+    name: &str) -> Event {
+    let mut event = Event::new(id, name.into());
+    let mut offset: usize = 0;
+    let len: usize = 8;
+
+    *event.extension_mut().provider_mut() = REAL_SYSTEM_PAGE_FAULT_PROVIDER;
+
+    let format = event.format_mut();
+
+    format.add_field(EventField::new(
+        "VirtualAddress".into(), "u64".into(),
+        LocationType::Static, offset, len));
+    offset += len;
+
+    format.add_field(EventField::new(
+        "ProgramCounter".into(), "u64".into(),
+        LocationType::Static, offset, len));
+
+    event.set_no_callstack_flag();
+
+    event
+}

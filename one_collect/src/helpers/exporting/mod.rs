@@ -840,6 +840,8 @@ pub struct ExportSettings {
     cpu_freq: u64,
     cswitches: bool,
     unwinder: bool,
+    hard_page_faults: bool,
+    soft_page_faults: bool,
     callstack_helper: Option<CallstackHelper>,
     os: OSExportSettings,
     events: Option<Vec<ExportEventCallback>>,
@@ -865,6 +867,8 @@ impl ExportSettings {
             cpu_profiling: false,
             cpu_freq: 1000,
             cswitches: false,
+            hard_page_faults: false,
+            soft_page_faults: false,
             callstack_helper: Some(callstack_helper.with_external_lookup()),
             unwinder,
             os: OSExportSettings::new(),
@@ -966,6 +970,18 @@ impl ExportSettings {
     pub fn with_cswitches(self) -> Self {
         let mut clone = self;
         clone.cswitches = true;
+        clone
+    }
+
+    pub fn with_hard_page_faults(self) -> Self {
+        let mut clone = self;
+        clone.hard_page_faults = true;
+        clone
+    }
+
+    pub fn with_soft_page_faults(self) -> Self {
+        let mut clone = self;
+        clone.soft_page_faults = true;
         clone
     }
 
@@ -1606,6 +1622,19 @@ impl ExportMachine {
             tid,
             ip,
             callstack_id)
+    }
+
+    pub fn add_process_sample(
+        &mut self,
+        pid: u32,
+        sample: ExportProcessSample) ->anyhow::Result<()> {
+        let proc = self.procs.entry(pid).or_insert_with(|| ExportProcess::new(pid));
+
+        filter_sample_ret_on_drop!(self, &proc, &sample, 0, None);
+
+        proc.add_sample(sample);
+
+        Ok(())
     }
 
     pub fn add_sample(
