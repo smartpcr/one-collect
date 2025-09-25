@@ -48,6 +48,8 @@ pub struct ElfModuleMetadata {
     build_id: Option<[u8; 20]>,
     debug_link_id: usize,
     version_metadata_id: usize,
+    p_vaddr: u64,
+    p_offset: u64,
 }
 
 impl ElfModuleMetadata {
@@ -56,6 +58,8 @@ impl ElfModuleMetadata {
             build_id: None,
             debug_link_id: 0,
             version_metadata_id: 0,
+            p_vaddr: 0,
+            p_offset: 0,
         }
     }
 
@@ -80,6 +84,9 @@ impl ElfModuleMetadata {
             }
             out.push_str("\",");
         }
+
+        out.push_str(&format!("\"p_vaddr\": \"0x{:x}\",", self.p_vaddr));
+        out.push_str(&format!("\"p_offset\": \"0x{:x}\",", self.p_offset));
 
         /* Remove trailing comma if it exists */
         if out.ends_with(',') {
@@ -142,6 +149,22 @@ impl ElfModuleMetadata {
         metadata: &str,
         strings: &mut InternedStrings) {
         self.version_metadata_id = strings.to_id(metadata);
+    }
+
+    pub fn p_vaddr(&self) -> u64 {
+        self.p_vaddr
+    }
+
+    pub fn set_p_vaddr(&mut self, p_vaddr: u64) {
+        self.p_vaddr = p_vaddr;
+    }
+
+    pub fn p_offset(&self) -> u64 {
+        self.p_offset
+    }
+
+    pub fn set_p_offset(&mut self, p_offset: u64) {
+        self.p_offset = p_offset;
     }
 }
 
@@ -231,7 +254,9 @@ mod tests {
         expected.push_str("{");
         expected.push_str("\"type\": \"ELF\",");
         expected.push_str("\"debug_link\": \"debug_link\",");
-        expected.push_str("\"build_id\": \"0101010101010101010101010101010101010101\"");
+        expected.push_str("\"build_id\": \"0101010101010101010101010101010101010101\",");
+        expected.push_str("\"p_vaddr\": \"0x0\",");
+        expected.push_str("\"p_offset\": \"0x0\"");
         expected.push_str("}");
 
         assert_eq!(expected, out);

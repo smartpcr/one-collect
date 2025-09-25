@@ -3,7 +3,7 @@
 
 use std::{fs::File, io::{BufRead, BufReader, Seek, SeekFrom}};
 use std::collections::HashSet;
-use ruwind::elf::{ElfSymbol, ElfSymbolIterator};
+use ruwind::elf::{ElfLoadHeader, ElfSymbol, ElfSymbolIterator};
 
 use crate::helpers::exporting::ExportMachine;
 
@@ -344,9 +344,9 @@ pub struct ElfSymbolReader<'a> {
 }
 
 impl<'a> ElfSymbolReader<'a> {
-    pub fn new(file: File) -> Self {
+    pub fn new(file: File, load_header: ElfLoadHeader, system_page_size: u64) -> Self {
         Self {
-            iterator: ElfSymbolIterator::new(file),
+            iterator: ElfSymbolIterator::new(file, load_header, system_page_size),
             current_sym: ElfSymbol::new(),
             current_sym_valid: false,
         }
@@ -757,6 +757,7 @@ impl ExportSymbolReader for R2RLoadedLayoutSymbolTransformer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::os::system_page_size;
     use std::path::Path;
 
     #[test]
@@ -921,7 +922,9 @@ mod tests {
             .expect("Could not find libc.so.6 in any expected location");
 
         if let Ok(file) = File::open(path) {
-            let mut reader = ElfSymbolReader::new(file);
+            let load_header = ElfLoadHeader::new(0, 0);
+            let system_page_size = system_page_size();
+            let mut reader = ElfSymbolReader::new(file, load_header, system_page_size);
             reader.reset();
 
             let mut actual_count = 0;

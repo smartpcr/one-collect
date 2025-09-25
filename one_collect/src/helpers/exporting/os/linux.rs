@@ -22,6 +22,8 @@ use crate::helpers::exporting::*;
 use crate::helpers::exporting::process::{ExportProcessOSHooks, MetricValue};
 use crate::helpers::exporting::universal::*;
 use crate::helpers::exporting::modulemetadata::{ModuleMetadata, ElfModuleMetadata};
+use crate::page_size_to_mask;
+use crate::os::system_page_size;
 
 use ruwind::elf::*;
 use ruwind::{ModuleAccessor, UnwindType};
@@ -118,6 +120,9 @@ impl ExportProcessLinuxExt for ExportProcess {
             return;
         }
 
+        let page_size = self.system_page_size();
+        let page_mask = self.system_page_mask();
+
         for map_index in 0..self.mappings().len() {
             let map = self.mappings().get(map_index).unwrap();
             if map.anon() {
@@ -165,7 +170,13 @@ impl ExportProcessLinuxExt for ExportProcess {
                     strings);
 
                 for sym_file in sym_files {
-                    let mut sym_reader = ElfSymbolReader::new(sym_file);
+
+                    // Page align the values from the load header.
+                    let p_offset = metadata.p_offset() & page_mask;
+                    let p_vaddr = metadata.p_vaddr() & page_mask;
+
+                    let load_header = ElfLoadHeader::new(p_offset, p_vaddr);
+                    let mut sym_reader = ElfSymbolReader::new(sym_file, load_header, page_size);
                     let map_mut = self.mappings_mut().get_mut(map_index).unwrap();
 
                     map_mut.add_matching_symbols(
@@ -552,6 +563,15 @@ impl ExportProcessOSHooks for ExportProcess {
                 root_fs.open_file(path)
             }
         }
+    }
+
+    fn system_page_mask(&self) -> u64 {
+        let page_size = self.system_page_size();
+        page_size_to_mask(page_size)
+    }
+
+    fn system_page_size(&self) -> u64 {
+        system_page_size()
     }
 }
 
@@ -1214,6 +1234,12 @@ impl OSExportMachine {
                                         elf_metadata.set_build_id(id);
                                     }
 
+                                    // Read the load header from the binary to get p_vaddr and p_offset
+                                    if let Ok(load_header) = get_load_header(&mut reader) {
+                                        elf_metadata.set_p_offset(load_header.p_offset());
+                                        elf_metadata.set_p_vaddr(load_header.p_vaddr());
+                                    }
+
                                     if read_package_metadata(&mut reader, &sections, &section_offsets, &mut package_buf).is_ok() {
                                         if let Ok(metadata) = std::str::from_utf8(&package_buf) {
                                             elf_metadata.set_version_metadata(metadata, &mut machine.strings);
@@ -1433,6 +1459,11 @@ impl ExportMachineOSHooks for ExportMachine {
             libc::sysconf(libc::_SC_NPROCESSORS_ONLN) as u32
         }
     }
+
+    fn os_system_page_size() -> u64 {
+        system_page_size()
+    }
+
 }
 
 impl ExportBuilderHelp for RingBufSessionBuilder {

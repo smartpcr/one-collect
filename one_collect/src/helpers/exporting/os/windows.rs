@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 use std::collections::hash_map::Entry::Occupied;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use std::fs::File;
 
@@ -11,6 +11,8 @@ use crate::etw::*;
 use crate::helpers::exporting::*;
 use crate::helpers::exporting::process::ExportProcessOSHooks;
 use crate::helpers::exporting::universal::*;
+use crate::os::system_page_size;
+use crate::page_size_to_mask;
 
 /* OS Specific Session Type */
 pub type Session = EtwSession;
@@ -71,6 +73,15 @@ impl ExportProcessOSHooks for ExportProcess {
         path: &Path) -> anyhow::Result<File> {
         let file = File::open(path)?;
         Ok(file)
+    }
+
+    fn system_page_mask(&self) -> u64 {
+        let page_size = self.system_page_size();
+        page_size_to_mask(page_size)
+    }
+
+    fn system_page_size(&self) -> u64 {
+        system_page_size()
     }
 }
 
@@ -1003,6 +1014,10 @@ impl ExportMachineOSHooks for ExportMachine {
         unsafe {
             GetActiveProcessorCount(0xFFFF)
         }
+    }
+
+    fn os_system_page_size() -> u64 {
+        system_page_size()
     }
 }
 
