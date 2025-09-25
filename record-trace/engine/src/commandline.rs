@@ -11,7 +11,7 @@ use std::process;
 use crate::export::{Exporter, NetTraceExporter, PerfViewExporter};
 
 #[derive(Parser)]
-#[command(version = crate_version!(), about, long_about = None)]
+#[command(name = "record-trace", version = crate_version!(), about, long_about = None)]
 struct Args {
     #[arg(long, help = "Output directory")]
     out: Option<String>,
