@@ -1797,13 +1797,19 @@ impl ExportMachine {
         closure: impl FnMut() + 'static) {
         self.drop_closures.push(Box::new(closure));
     }
+
+    pub fn cleanup(&mut self) {
+        for closure in &mut self.drop_closures {
+            closure();
+        }
+
+        self.drop_closures.clear();
+    }
 }
 
 impl Drop for ExportMachine {
     fn drop(&mut self) {
-        for closure in &mut self.drop_closures {
-            closure();
-        }
+        self.cleanup();
     }
 }
 

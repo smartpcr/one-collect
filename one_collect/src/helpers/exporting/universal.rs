@@ -136,6 +136,13 @@ impl UniversalExporter {
             move || { now.elapsed() >= duration })
     }
 
+    pub fn cleanup(&mut self) {
+        /* Ensure drop hooks run if they haven't already */
+        for mut hook in self.drop_hooks.drain(..) {
+            hook();
+        }
+    }
+
     pub fn parse_until(
         mut self,
         name: &str,

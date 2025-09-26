@@ -1557,19 +1557,32 @@ impl UniversalExporterOSHooks for UniversalExporter {
 
         let exporter = session.build_exporter(settings)?;
 
-        self.run_export_hooks(&exporter)?;
+        /* Put in closure so we can contain errors */
+        let os_parse_loop = || {
+            self.run_export_hooks(&exporter)?;
 
-        session.capture_environment();
+            session.capture_environment();
 
-        exporter.borrow_mut().mark_start();
-        session.enable()?;
-        session.parse_until(until)?;
-        session.disable()?;
-        exporter.borrow_mut().mark_end();
+            exporter.borrow_mut().mark_start();
+            session.enable()?;
+            session.parse_until(until)?;
+            session.disable()?;
+            exporter.borrow_mut().mark_end();
 
-        self.run_parsed_hooks(&exporter)?;
+            self.run_parsed_hooks(&exporter)?;
 
-        Ok(exporter)
+            Ok(())
+        };
+
+        /* Ensure we always cleanup exporter upon failure */
+        match os_parse_loop() {
+            Ok(()) => Ok(exporter),
+            Err(err) => {
+                exporter.borrow_mut().cleanup();
+
+                Err(err)
+            }
+        }
     }
 }
 
