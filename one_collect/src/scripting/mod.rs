@@ -231,6 +231,10 @@ impl ScriptEngine {
             }
         }
     }
+
+    pub fn cleanup_task(&mut self) -> Box<dyn FnMut()> {
+        self.os.cleanup_task()
+    }
 }
 
 #[cfg(test)]

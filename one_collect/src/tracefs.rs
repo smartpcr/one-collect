@@ -287,6 +287,32 @@ impl TraceFS {
             &mut reader)
     }
 
+    /// Runs a command on the dynamic_events tracefs file.
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - A string containing the command to run.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` which is `Ok` if the command is successfully parsed, and `Err` otherwise.
+    pub fn dynamic_event_command(
+        &self,
+        command: &str) -> Result<()> {
+        let mut path_buf = PathBuf::new();
+
+        path_buf.push(&self.root);
+        path_buf.push("dynamic_events");
+
+        let mut file = File::options()
+            .append(true)
+            .open(path_buf)?;
+
+        file.write_all(command.as_bytes())?;
+
+        Ok(())
+    }
+
     fn register_uprobe_full(
         &self,
         probe_type: &str,
