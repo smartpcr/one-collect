@@ -823,9 +823,27 @@ pub struct ScriptedUniversalExporter {
 
 impl ScriptedUniversalExporter {
     pub fn new(settings: ExportSettings) -> Self {
+        let mut engine = ScriptEngine::new();
+        let mut swapper = UniversalExporterSwapper::new(settings);
+
+        /*
+         * Ensure engine cleanup always runs once exporter drops:
+         * We need to do this well ahead of time to ensure if we
+         * run a script partially, but some things got registered
+         * we will clean them up. A simple scenario of this is
+         * registering probes at the start of a script. Then the
+         * script hits an error. We still want to cleanup the probes
+         * even though errors were hit.
+         */
+        if let Some(exporter) = swapper.exporter.take() {
+            let exporter = exporter.with_export_drop_hook(engine.cleanup_task());
+
+            swapper.exporter.replace(exporter);
+        }
+
         let mut scripted = Self {
-            exporter: Writable::new(UniversalExporterSwapper::new(settings)),
-            engine: ScriptEngine::new(),
+            exporter: Writable::new(swapper),
+            engine,
         };
 
         scripted.init();
@@ -982,7 +1000,16 @@ impl ScriptedUniversalExporter {
     pub fn from_script(
         self,
         script: &str) -> anyhow::Result<UniversalExporter> {
-        self.engine.run(script)?;
+        match self.engine.run(script) {
+            Ok(()) => {},
+            Err(err) => {
+                let mut exporter = self.exporter.borrow_mut().take()?;
+
+                exporter.cleanup();
+
+                return Err(err);
+            },
+        }
 
         self.exporter.borrow_mut().take()
     }

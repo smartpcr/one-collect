@@ -275,12 +275,15 @@ impl Recorder {
 
         if let Err(e) = format.run(&mut exporter, &self.args) {
             self.output.error(&format!("Error: {}", e));
+            exporter.cleanup();
             return 1;
         }
 
         self.output.normal("Finished recording trace.");
         self.output.normal(
             &format!("Trace written to {}", self.args.output_path().display()));
+
+        exporter.cleanup();
 
         0
     }

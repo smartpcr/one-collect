@@ -137,4 +137,9 @@ impl OSScriptEngine {
             Ok(event.into())
         });
     }
+
+    pub fn cleanup_task(&mut self) -> Box<dyn FnMut()> {
+        /* Nothing */
+        Box::new(|| {})
+    }
 }
