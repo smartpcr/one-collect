@@ -9,6 +9,8 @@ const OUTPUT_NORMAL: i32 = 0;
 const OUTPUT_LIVE: i32 = 1;
 const OUTPUT_ERROR: i32 = 2;
 const OUTPUT_PROGRESS: i32 = 3;
+const OUTPUT_START: i32 = 4;
+const OUTPUT_END: i32 = 5;
 
 type COutputCallback = extern "C" fn(i32, *const u8, usize) -> i32;
 
@@ -46,6 +48,16 @@ extern "C" fn RecordTrace(
         output.with_progress(move |output| {
             let bytes = output.as_bytes();
             callback(OUTPUT_PROGRESS, bytes.as_ptr(), bytes.len())
+        });
+
+        output.with_start(move |output| {
+            let bytes = output.as_bytes();
+            callback(OUTPUT_START, bytes.as_ptr(), bytes.len())
+        });
+
+        output.with_end(move |output| {
+            let bytes = output.as_bytes();
+            callback(OUTPUT_END, bytes.as_ptr(), bytes.len())
         });
 
         let parser = RecordArgsParser::new(
