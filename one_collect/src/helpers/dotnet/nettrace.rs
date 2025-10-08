@@ -14,6 +14,8 @@ const U32_LEN: usize = 4;
 const U64_LEN: usize = 8;
 const GUID_LEN: usize = 16;
 
+use crate::event::{LocationType, EventFormat, EventField};
+
 pub fn parse_event_extension_v1(
     data: &[u8],
     mut output: impl FnMut(u8, &[u8])) {
@@ -87,6 +89,374 @@ pub fn parse_event_extension_v1(
         }
 
         count += 1;
+    }
+}
+
+pub struct FieldsParserV5 {
+}
+
+struct FieldType {
+    type_name: &'static str,
+    size: usize,
+}
+
+impl FieldsParserV5 {
+    const TYPE_OBJECT:u32 = 1u32;
+    const TYPE_BOOL:u32 = 3u32;
+    const TYPE_UTF16_CODE_UNIT:u32 = 4u32;
+    const TYPE_SBYTE:u32 = 5u32;
+    const TYPE_BYTE:u32 = 6u32;
+    const TYPE_INT16:u32 = 7u32;
+    const TYPE_UINT16:u32 = 8u32;
+    const TYPE_INT32:u32 = 9u32;
+    const TYPE_UINT32:u32 = 10u32;
+    const TYPE_INT64:u32 = 11u32;
+    const TYPE_UINT64:u32 = 12u32;
+    const TYPE_SINGLE:u32 = 13u32;
+    const TYPE_DOUBLE:u32 = 14u32;
+    const TYPE_DATE_TIME:u32 = 16u32;
+    const TYPE_GUID:u32 = 17u32;
+    const TYPE_UTF16_STRING:u32 = 18u32;
+    const TYPE_ARRAY:u32 = 19u32;
+
+    fn read_int(data: &[u8]) -> Option<u32> {
+        if data.len() < U32_LEN {
+            None
+        } else {
+            Some(u32::from_le_bytes(data[0..U32_LEN].try_into().unwrap()))
+        }
+    }
+
+    fn skip_string<'a>(data: &'a [u8]) -> &'a [u8] {
+        let mut offset = 0;
+        for c in data.chunks_exact(2) {
+            let c = u16::from_le_bytes(c.try_into().unwrap());
+
+            offset += 2;
+
+            if c == 0 { break; }
+        }
+
+        &data[offset..]
+    }
+
+    fn read_string<'a>(
+        data: &'a [u8],
+        output: &mut String) -> &'a [u8] {
+        output.clear();
+
+        let mut offset = 0;
+        for c in data.chunks_exact(2) {
+            let c = u16::from_le_bytes(c.try_into().unwrap());
+
+            offset += 2;
+
+            if c == 0 { break; }
+
+            match char::from_u32(c as u32) {
+                Some(c) => { output.push(c); },
+                None => { output.push('?'); },
+            }
+        }
+
+        &data[offset..]
+    }
+
+    fn append_field(
+        format: &mut EventFormat,
+        field_name: String,
+        field_type: &str,
+        size: usize) {
+        let mut offset = 0;
+
+        if let Some(field) = format.fields().last() {
+            offset = field.offset + field.size;
+        }
+
+        let location = match field_type {
+            "string" => LocationType::StaticUTF16String,
+            _ => {
+                if field_type.starts_with("__dyn_array") {
+                    LocationType::StaticLenPrefixArray
+                } else {
+                    LocationType::Static
+                }
+            },
+        };
+
+        format.add_field(EventField::new(
+            field_name,
+            field_type.to_owned(),
+            location,
+            offset,
+            size));
+    }
+
+    fn parse_type<'a>(fields: &'a [u8]) -> Option<FieldType> {
+        let ftype = match Self::read_int(fields) {
+            Some(value) => { value },
+            None => { return None; },
+        };
+
+        match ftype {
+            Self::TYPE_OBJECT => {
+                Some(FieldType {
+                    type_name: "object",
+                    size: 0,
+                })
+            },
+
+            Self::TYPE_BOOL => {
+                Some(FieldType {
+                    type_name: "u32",
+                    size: 4,
+                })
+            },
+
+            Self::TYPE_UTF16_CODE_UNIT => {
+                Some(FieldType {
+                    type_name: "u16",
+                    size: 2,
+                })
+            },
+
+            Self::TYPE_SBYTE => {
+                Some(FieldType {
+                    type_name: "s8",
+                    size: 1,
+                })
+            },
+
+            Self::TYPE_BYTE => {
+                Some(FieldType {
+                    type_name: "u8",
+                    size: 1,
+                })
+            },
+
+            Self::TYPE_INT16 => {
+                Some(FieldType {
+                    type_name: "s16",
+                    size: 2,
+                })
+            },
+
+            Self::TYPE_UINT16 => {
+                Some(FieldType {
+                    type_name: "u16",
+                    size: 2,
+                })
+            },
+
+            Self::TYPE_INT32 => {
+                Some(FieldType {
+                    type_name: "s32",
+                    size: 4,
+                })
+            },
+
+            Self::TYPE_UINT32 => {
+                Some(FieldType {
+                    type_name: "u32",
+                    size: 4,
+                })
+            },
+
+            Self::TYPE_INT64 => {
+                Some(FieldType {
+                    type_name: "s64",
+                    size: 8,
+                })
+            },
+
+            Self::TYPE_UINT64 => {
+                Some(FieldType {
+                    type_name: "u64",
+                    size: 8,
+                })
+            },
+
+            Self::TYPE_SINGLE => {
+                Some(FieldType {
+                    type_name: "float",
+                    size: 4,
+                })
+            },
+
+            Self::TYPE_DOUBLE => {
+                Some(FieldType {
+                    type_name: "double",
+                    size: 8,
+                })
+            },
+
+            Self::TYPE_DATE_TIME => {
+                Some(FieldType {
+                    type_name: "u8",
+                    size: 16,
+                })
+            },
+
+            Self::TYPE_GUID => {
+                Some(FieldType {
+                    type_name: "u8",
+                    size: 16,
+                })
+            },
+
+            Self::TYPE_UTF16_STRING => {
+                Some(FieldType {
+                    type_name: "string",
+                    size: 0,
+                })
+            },
+
+            Self::TYPE_ARRAY => {
+                Some(FieldType {
+                    type_name: "array",
+                    size: 0,
+                })
+            },
+
+            _ => { None }
+        }
+    }
+
+    fn parse_object<'a>(
+        mut fields: &'a [u8],
+        format: &mut EventFormat,
+        depth: usize) -> &'a [u8] {
+        if depth > 32 {
+            return &[];
+        }
+
+        let mut v2 = false;
+
+        if let Some(mut count) = Self::read_int(fields) {
+            fields = &fields[4..];
+
+            if count == 0 {
+                /* Handle V2Params, if any */
+                if let Some(bytes) = Self::read_int(fields) {
+                    fields = &fields[4..];
+
+                    if bytes == 0 || fields.len() == 0 {
+                        /* Not enough bytes */
+                        return &[];
+                    }
+
+                    let tag = fields[0];
+                    fields = &fields[1..];
+
+                    if tag != 2 {
+                        /* Not V2Params, unknown. */
+                        return &[];
+                    }
+
+                    /* Update count */
+                    if let Some(new_count) = Self::read_int(fields) {
+                        fields = &fields[4..];
+                        count = new_count;
+
+                        v2 = true;
+                    }
+                }
+            }
+
+            while count > 0 {
+                let mut name = String::new();
+                let mut next = None;
+
+                if v2 {
+                    if fields.len() < 4 {
+                        break;
+                    }
+
+                    if let Some(size) = Self::read_int(fields) {
+                        let size = size as usize;
+
+                        if size > fields.len() {
+                            break;
+                        }
+
+                        next = Some(&fields[size..]);
+                        fields = &fields[4..];
+
+                        fields = Self::read_string(fields, &mut name);
+                    } else {
+                        break;
+                    }
+                }
+
+                if let Some(field_type) = Self::parse_type(fields) {
+                    fields = &fields[4..];
+
+                    match field_type.type_name {
+                        "object" => {
+                            fields = Self::parse_object(fields, format, depth+1);
+
+                            if !v2 {
+                                fields = Self::read_string(fields, &mut name);
+                            }
+                        },
+
+                        "array" => {
+                            if let Some(array_type) = Self::parse_type(fields) {
+                                fields = &fields[4..];
+
+                                match array_type.type_name {
+                                    "object" | "array" => {
+                                        /*
+                                         * Currently don't support complex array types:
+                                         * Allowing a field to have it's own format would
+                                         * allow for this. We would then parse a new
+                                         * format via parse_object and add it to the field.
+                                         */
+                                        return &[];
+                                    },
+                                    _ => {
+                                        let type_name = format!("__dyn_array {}", array_type.type_name);
+
+                                        Self::append_field(format, name, &type_name, 0);
+                                    },
+                                }
+                            } else {
+                                break;
+                            }
+                        },
+
+                        _ => {
+                            if !v2 {
+                                fields = Self::read_string(fields, &mut name);
+                            }
+
+                            Self::append_field(format, name, field_type.type_name, field_type.size);
+                        },
+                    }
+
+                    if let Some(next) = next {
+                        fields = next;
+                    }
+                } else {
+                    break;
+                }
+
+                count -= 1;
+            }
+        } else {
+            /* No more, not enough data. */
+            fields = &[];
+        }
+
+        fields
+    }
+
+    pub fn parse(mut fields: &[u8]) -> EventFormat {
+        let mut format = EventFormat::default();
+
+        Self::parse_object(fields, &mut format, 1);
+
+        format
     }
 }
 

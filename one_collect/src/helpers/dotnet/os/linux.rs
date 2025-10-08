@@ -562,6 +562,7 @@ struct LinuxDotNetEventInfo {
     keywords: Option<u64>,
     name_id: Option<usize>,
     logical_id: Option<usize>,
+    format_index: Option<usize>,
 }
 
 struct LinuxDotNetProviderContext<'a> {
@@ -570,9 +571,27 @@ struct LinuxDotNetProviderContext<'a> {
     id: usize,
     info: &'a LinuxDotNetEventInfo,
     event_names: &'a InternedStrings,
+    formats: &'a Vec<EventFormat>,
 }
 
 impl<'a> LinuxDotNetProviderContext<'a> {
+    fn format_key(&self) -> usize {
+        let name_id = self.info.name_id.unwrap_or(0);
+        let format_id = self.info.format_index.unwrap_or(0);
+
+        name_id << 32 | format_id
+    }
+
+    fn self_describing_format(&self) -> Option<&EventFormat> {
+        if let Some(index) = self.info.format_index {
+            if index < self.formats.len() {
+                return Some(&self.formats[index]);
+            }
+        }
+
+        None
+    }
+
     fn short_event_name(
         &self,
         output: &mut String) {
@@ -667,7 +686,7 @@ impl LinuxDotNetProvider {
         }
 
         let mut record_types = HashMap::new();
-        let mut record_names = HashMap::new();
+        let mut record_formats = HashMap::new();
         let mut name_buf = String::new();
 
         /* Register provider level callback for recording */
@@ -676,31 +695,46 @@ impl LinuxDotNetProvider {
                 let attributes = trace.default_os_attributes()?;
                 let range = context.payload_range.clone();
 
+                /*
+                 * There is a two level lookup here. We first lookup by
+                 * the normal key (EVENT ID + PID). If we cannot find the
+                 * record type, then we check if we have a record for that
+                 * event (EVENT NAME ID + FORMAT INDEX). This ensures that
+                 * we only save the minimal amount of record types even
+                 * when there are many processes that share the same types.
+                 */
+
                 /* Try to get record_type details for ID + PID */
                 let record_type = match record_types.entry(context.key) {
                     Occupied(entry) => { *entry.get() },
                     Vacant(entry) => {
-                        /* Check if we already have a record type by name */
-                        context.short_event_name(&mut name_buf);
+                        /* Get a format key (Name ID + Format Index, etc.) */
+                        let format_key = context.format_key();
 
-                        let record_type = match record_names.get(&name_buf) {
+                        /* Check if we already have a record type for this format type */
+                        let record_type = match record_formats.get(&format_key) {
                             Some(record_type) => { *record_type },
                             None => {
                                 /* Create new record type */
+                                context.short_event_name(&mut name_buf);
+
                                 let full_name = event_full_name(
                                     &provider_name,
                                     provider,
                                     &name_buf);
 
-                                let key_name = full_name.to_owned();
-
                                 let kind = trace.kind(&full_name);
+
+                                let format = match context.self_describing_format() {
+                                    Some(format) => { format.clone() },
+                                    None => { EventFormat::default() },
+                                };
 
                                 let mut record_type = ExportRecordType::new(
                                     kind,
                                     context.id,
                                     full_name,
-                                    EventFormat::default());
+                                    format);
 
                                 record_type.set_original_data_flag();
 
@@ -711,7 +745,7 @@ impl LinuxDotNetProvider {
                                     record_type,
                                 };
 
-                                record_names.insert(key_name, record_type);
+                                record_formats.insert(format_key, record_type);
 
                                 record_type
                             }
@@ -861,9 +895,14 @@ fn register_dotnet_tracepoint(
 
     let empty_info = LinuxDotNetEventInfo::default();
 
+    let mut format_lookup: HashMap<Vec<u8>, usize> = HashMap::new();
+    let mut formats = Vec::new();
     let mut info_lookup = HashMap::new();
     let mut event_names = InternedStrings::new(16);
     let mut name_buf = String::new();
+
+    /* Index 0 should always be default */
+    formats.push(EventFormat::default());
 
     let settings = settings.with_event(
         event,
@@ -921,6 +960,19 @@ fn register_dotnet_tracepoint(
                                     if let Some(id) = provider.named_events.get(&name_buf) {
                                         info.logical_id = Some(*id);
                                     }
+
+                                    info.format_index = match format_lookup.get(meta.fields()) {
+                                        Some(format_index) => { Some(*format_index) },
+                                        None => {
+                                            let format = nettrace::FieldsParserV5::parse(meta.fields());
+                                            let format_index = formats.len();
+                                            formats.push(format);
+
+                                            format_lookup.insert(meta.fields().into(), format_index);
+
+                                            Some(format_index)
+                                        }
+                                    };
                                 }
 
                                 info_lookup.insert(key, info);
@@ -966,6 +1018,7 @@ fn register_dotnet_tracepoint(
                     id,
                     info,
                     event_names: &event_names,
+                    formats: &formats,
                 };
 
                 for callback in &mut provider.callbacks {
