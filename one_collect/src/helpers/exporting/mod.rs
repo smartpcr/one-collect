@@ -2,7 +2,6 @@
 // Licensed under the MIT license.
 
 use std::collections::{HashMap, HashSet};
-use std::collections::hash_map::Entry::{Vacant, Occupied};
 use std::collections::hash_map::{Values, ValuesMut};
 use std::time::Duration;
 use std::path::Path;
@@ -36,7 +35,8 @@ pub mod attributes;
 use attributes::ExportAttributes;
 use attributes::ExportAttributePair;
 use attributes::ExportAttributeWalker;
-use attributes::ExportAttributeValue;
+use attributes::VersionOpCodeAttributeSource;
+use attributes::TraceContextAttributeSource;
 
 pub mod span;
 use span::ExportSpan;
@@ -133,14 +133,14 @@ impl ExportProxy {
 
 struct ExportSampler {
     exporter: Writable<ExportMachine>,
-    os_attributes_cache: HashMap<u32, usize>,
-    version_str_id: usize,
-    op_code_str_id: usize,
+    attribute_sources: Writable<Vec<Box<dyn ExportAttributeSource>>>,
     frames: Vec<u64>,
     os: OSExportSampler,
     disable_callstacks: bool,
     version_override: Option<u16>,
     op_code_override: Option<u16>,
+    span_id_override: Option<[u8; 8]>,
+    trace_id_override: Option<[u8; 16]>,
 }
 
 pub trait ExportSamplerOSHooks {
@@ -171,68 +171,33 @@ pub trait ExportSamplerOSHooks {
     fn os_event_op_code(
         &self,
         data: &EventData) -> anyhow::Result<Option<u16>>;
+
+    fn os_event_span_id(
+        &self,
+        data: &EventData) -> anyhow::Result<Option<[u8; 8]>>;
+
+    fn os_event_trace_id(
+        &self,
+        data: &EventData) -> anyhow::Result<Option<[u8; 16]>>;
 }
 
 impl ExportSampler {
     fn new(
         exporter: &Writable<ExportMachine>,
         os: OSExportSampler) -> Self {
-        let version_str_id = exporter.borrow_mut().intern("Version");
-        let op_code_str_id = exporter.borrow_mut().intern("OpCode");
+        let attribute_sources = exporter.borrow_mut().attribute_sources.clone();
 
         Self {
             exporter: exporter.clone(),
+            attribute_sources,
             os,
             frames: Vec::new(),
             version_override: None,
             op_code_override: None,
-            os_attributes_cache: HashMap::new(),
-            version_str_id,
-            op_code_str_id,
+            span_id_override: None,
+            trace_id_override: None,
             disable_callstacks: false,
         }
-    }
-
-    fn default_os_attributes(
-        &mut self,
-        data: &EventData) -> anyhow::Result<usize> {
-        let version = self.version(data)?.unwrap_or(0);
-        let op_code = self.op_code(data)?.unwrap_or(0);
-        let lookup_id = (version as u32) << 16 | op_code as u32;
-
-        /* Lookup attributes by version + op_code pair */
-        let attributes_id = if lookup_id != 0 {
-            match self.os_attributes_cache.entry(lookup_id) {
-                Vacant(entry) => {
-                    /* New pair, get new attribute ID for this */
-                    let mut attributes = ExportAttributes::default();
-
-                    attributes.push(
-                        ExportAttributePair::new(
-                            self.version_str_id,
-                            ExportAttributeValue::Value(version as u64)));
-
-                    attributes.push(
-                        ExportAttributePair::new(
-                            self.op_code_str_id,
-                            ExportAttributeValue::Value(op_code as u64)));
-
-                    let id = self.exporter.borrow_mut().push_unique_attributes(attributes);
-
-                    entry.insert(id);
-
-                    id
-                },
-                Occupied(entry) => {
-                    /* Existing pair, use existing ID */
-                    *entry.get()
-                },
-            }
-        } else {
-            0
-        };
-
-        Ok(attributes_id)
     }
 
     fn override_version(
@@ -245,6 +210,18 @@ impl ExportSampler {
         &mut self,
         op_code: Option<u16>) {
         self.op_code_override = op_code;
+    }
+
+    fn override_span_id(
+        &mut self,
+        span_id: Option<[u8; 8]>) {
+        self.span_id_override = span_id;
+    }
+
+    fn override_trace_id(
+        &mut self,
+        trace_id: Option<[u8; 16]>) {
+        self.trace_id_override = trace_id;
     }
 
     fn version(
@@ -263,6 +240,28 @@ impl ExportSampler {
             Some(op_code) => Ok(Some(op_code)),
             None => self.os_event_op_code(data),
         }
+    }
+
+    fn span_id(
+        &self,
+        data: &EventData) -> anyhow::Result<Option<[u8; 8]>> {
+        match self.span_id_override {
+            Some(span_id) => Ok(Some(span_id)),
+            None => self.os_event_span_id(data),
+        }
+    }
+
+    fn trace_id(
+        &self,
+        data: &EventData) -> anyhow::Result<Option<[u8; 16]>> {
+        match self.trace_id_override {
+            Some(trace_id) => Ok(Some(trace_id)),
+            None => self.os_event_trace_id(data),
+        }
+    }
+
+    fn attribute_sources(&self) -> Writable<Vec<Box<dyn ExportAttributeSource>>> {
+        self.attribute_sources.clone()
     }
 
     fn make_sample(
@@ -337,6 +336,13 @@ impl ExportSampler {
         &mut self,
         record_type: ExportRecordType) -> u16 {
         self.exporter.borrow_mut().record_type(record_type)
+    }
+
+    pub fn record_data(
+        &mut self,
+        record_type_id: u16,
+        data: &[u8]) ->usize {
+        self.exporter.borrow_mut().record_data(record_type_id, data)
     }
 
     pub fn kind(
@@ -489,8 +495,8 @@ impl<'a> ExportSampleBuilder<'a> {
 
     pub fn with_attributes(
         &mut self,
-        attributes_id: usize) -> &mut Self {
-        if attributes_id != 0 {
+        attributes_id: Option<usize>) -> &mut Self {
+        if let Some(attributes_id) = attributes_id {
             self.attributes_id = Some(attributes_id);
         }
 
@@ -572,6 +578,19 @@ impl<'a> ExportSampleBuilder<'a> {
     }
 }
 
+pub trait ExportAttributeSource {
+    fn initialize(
+        &mut self,
+        machine: &mut ExportMachine);
+
+    fn add_attributes(
+        &mut self,
+        trace: &mut ExportTraceContext,
+        attributes: &mut ExportAttributes) -> anyhow::Result<()>;
+}
+
+pub type BoxedExportTraceAttributesHook = Box<dyn FnMut(&mut ExportTraceContext, usize) -> anyhow::Result<usize>>;
+
 pub struct ExportTraceContext<'a> {
     sampler: Writable<ExportSampler>,
     proxy: Writable<ExportProxy>,
@@ -622,10 +641,25 @@ impl<'a> ExportTraceContext<'a> {
         self.sampler.borrow().version(self.data)
     }
 
+    pub fn span_id(&self) -> anyhow::Result<Option<[u8; 8]>> {
+        self.sampler.borrow().span_id(self.data)
+    }
+
+    pub fn trace_id(&self) -> anyhow::Result<Option<[u8; 16]>> {
+        self.sampler.borrow().trace_id(self.data)
+    }
+
     pub fn record_type(
         &mut self,
         record_type: ExportRecordType) -> u16 {
         self.sampler.borrow_mut().record_type(record_type)
+    }
+
+    pub fn record_data(
+        &mut self,
+        record_type_id: u16,
+        data: &[u8]) -> usize {
+        self.sampler.borrow_mut().record_data(record_type_id, data)
     }
 
     pub fn kind(
@@ -673,8 +707,46 @@ impl<'a> ExportTraceContext<'a> {
         self.sampler.borrow_mut().override_op_code(op_code);
     }
 
-    pub fn default_os_attributes(&mut self) -> anyhow::Result<usize> {
-        self.sampler.borrow_mut().default_os_attributes(self.data)
+    pub fn override_trace_id(
+        &mut self,
+        trace_id: Option<[u8; 16]>) {
+        self.sampler.borrow_mut().override_trace_id(trace_id);
+    }
+
+    pub fn override_span_id(
+        &mut self,
+        span_id: Option<[u8; 8]>) {
+        self.sampler.borrow_mut().override_span_id(span_id);
+    }
+
+    pub fn default_attributes(&mut self) -> anyhow::Result<Option<usize>> {
+        let sources = self.sampler.borrow().attribute_sources();
+        let mut attributes = ExportAttributes::default();
+
+        for source in sources.borrow_mut().iter_mut() {
+            source.add_attributes(self, &mut attributes)?;
+        }
+
+        let associated_ids = attributes.associated_ids();
+        let new_attributes = attributes.attributes();
+
+        let attribute_id = if !new_attributes.is_empty() || !associated_ids.len() > 1 {
+            /*
+             * Multiple items, always save new attributes:
+             * At some point we could look at caching these if needed. Many
+             * of the attributes are likely very unique (IE: ActivityId, SpanId).
+             * It's unknown right now if caching is a good idea or not.
+             */
+            Some(self.sampler.borrow_mut().push_unique_attributes(attributes))
+        } else if associated_ids.len() == 1 {
+            /* Only single association, just use that directly */
+            Some(associated_ids[0])
+        } else {
+            /* No associations */
+            None
+        };
+
+        Ok(attribute_id)
     }
 
     pub fn sample_builder(&mut self) -> ExportSampleBuilder {
@@ -812,6 +884,14 @@ impl<'a> ExportSampleFilterContext<'a> {
     }
 }
 
+/*
+ * NOTE:
+ * Macros are required for situations where we need to do common operations
+ * upon a mutable ref, but there is already a mutable ref taken. This requires
+ * the operation to be done within the same function/scope. Therefore, it is
+ * only achievable either code copies or macros. Macros are much better than
+ * several copies of the same code scattered throughout.
+ */
 macro_rules! filter_sample_ret_on_drop {
     ($self: expr, $proc:expr, $sample:expr, $record_type_id:expr, $record_data:expr) => {
         if !$self.sample_hooks.is_empty() {
@@ -833,6 +913,32 @@ macro_rules! filter_sample_ret_on_drop {
     }
 }
 
+macro_rules! create_record {
+    ($self: expr, $record_type:expr, $record_data:expr) => {
+        {
+            /*
+             * Add record data to global data slice:
+             * Instead of having many vecs (IE: each process) we keep
+             * a single vec that can grow naturally to accomodate the
+             * system wide view of records with minimal allocations.
+             */
+            let record_id = $self.records.len();
+            let offset = $self.record_data.len();
+            let len = $record_data.len() as u32;
+
+            $self.records.push(
+                ExportRecord::new(
+                    $record_type,
+                    offset,
+                    len));
+
+            $self.record_data.extend_from_slice($record_data);
+
+            record_id
+        }
+    }
+}
+
 pub struct ExportSettings {
     string_buckets: usize,
     callstack_buckets: usize,
@@ -847,6 +953,7 @@ pub struct ExportSettings {
     events: Option<Vec<ExportEventCallback>>,
     sample_hooks: Option<Vec<Box<dyn Fn(&ExportSampleFilterContext) -> ExportFilterAction>>>,
     target_pids: Option<Vec<i32>>,
+    attribute_sources: Option<Vec<Box<dyn ExportAttributeSource>>>,
     proxy_id: usize,
 }
 
@@ -875,6 +982,7 @@ impl ExportSettings {
             events: None,
             sample_hooks: None,
             target_pids: None,
+            attribute_sources: None,
             proxy_id: 0,
         }
     }
@@ -919,6 +1027,29 @@ impl ExportSettings {
         }
 
         clone
+    }
+
+    pub fn with_attribute_source(
+        self,
+        source: Box<dyn ExportAttributeSource>) -> Self {
+        let mut clone = self;
+
+        match clone.attribute_sources.as_mut() {
+            Some(attribute_sources) => { attribute_sources.push(source); },
+            None => { clone.attribute_sources = Some(vec![source]); }
+        }
+
+        clone
+    }
+
+    pub fn with_version_attributes(self) -> Self {
+        self.with_attribute_source(
+            Box::new(VersionOpCodeAttributeSource::default()))
+    }
+
+    pub fn with_trace_context_attributes(self) -> Self {
+        self.with_attribute_source(
+            Box::new(TraceContextAttributeSource::default()))
     }
 
     pub fn with_event(
@@ -1025,6 +1156,7 @@ pub struct ExportMachine {
     end_qpc: Option<u64>,
     duration: Option<Duration>,
     sample_hooks: Vec<Box<dyn Fn(&ExportSampleFilterContext) -> ExportFilterAction>>,
+    attribute_sources: Writable<Vec<Box<dyn ExportAttributeSource>>>,
 }
 
 pub trait ExportMachineSessionHooks {
@@ -1076,6 +1208,7 @@ impl ExportMachine {
         let mut strings = InternedStrings::new(settings.string_buckets);
         let callstacks = InternedCallstacks::new(settings.callstack_buckets);
         let sample_hooks = settings.sample_hooks.take().unwrap_or_default();
+        let mut attribute_sources = settings.attribute_sources.take().unwrap_or_default();
         let mut records = Vec::new();
         let mut attributes = Vec::new();
         let mut record_types = Vec::new();
@@ -1090,7 +1223,7 @@ impl ExportMachine {
         /* Ensure attribute ID 0 is always empty/default */
         attributes.push(ExportAttributes::default());
 
-        Self {
+        let mut machine = Self {
             settings,
             strings,
             callstacks,
@@ -1110,7 +1243,17 @@ impl ExportMachine {
             end_qpc: None,
             duration: None,
             sample_hooks,
+            attribute_sources: Writable::new(Vec::new()),
+        };
+
+        /* Initialize and add attribute sources */
+        for mut source in attribute_sources.drain(..) {
+            source.initialize(&mut machine);
+
+            machine.attribute_sources.borrow_mut().push(source);
         }
+
+        machine
     }
 
     pub fn start_date(&self) -> Option<DateTime<Utc>> { self.start_date }
@@ -1408,6 +1551,25 @@ impl ExportMachine {
             &mut self.strings)
     }
 
+    pub fn record_attribute(
+        &mut self,
+        name: &str,
+        data: &[u8]) -> ExportAttributePair {
+        let record_id = create_record!(self, 0, data);
+
+        ExportAttributePair::new_record(
+            name,
+            record_id,
+            &mut self.strings)
+    }
+
+    pub fn record_data(
+        &mut self,
+        record_type: u16,
+        data: &[u8]) -> usize {
+        create_record!(self, record_type, data)
+    }
+
     pub fn record_type(
         &mut self,
         record_type: ExportRecordType) -> u16 {
@@ -1681,23 +1843,7 @@ impl ExportMachine {
 
         filter_sample_ret_on_drop!(self, &proc, &sample, record_type, Some(record_data));
 
-        /*
-         * Add record data to global data slice:
-         * Instead of having many vecs (IE: each process) we keep
-         * a single vec that can grow naturally to accomodate the
-         * system wide view of records with minimal allocations.
-         */
-        let record_id = self.records.len();
-        let offset = self.record_data.len();
-        let len = record_data.len() as u32;
-
-        self.records.push(
-            ExportRecord::new(
-                record_type,
-                offset,
-                len));
-
-        self.record_data.extend_from_slice(record_data);
+        let record_id = create_record!(self, record_type, record_data);
 
         /* Associate record with sample and add */
         sample.attach_record(record_id);

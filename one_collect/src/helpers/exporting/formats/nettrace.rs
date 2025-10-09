@@ -1331,6 +1331,9 @@ impl NetTraceWriter {
                         self.output.write_u8(add_flag | 6)?;
                         self.output.write_utf8(name)?;
                         self.output.write_varint(value)?;
+                    },
+                    ExportAttributeValue::Record(_id) => {
+                        anyhow::bail!("Not yet supported.");
                     }
                 }
             }

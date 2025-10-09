@@ -692,7 +692,7 @@ impl LinuxDotNetProvider {
         /* Register provider level callback for recording */
         self.callbacks.push(
             Box::new(move |trace, context| {
-                let attributes = trace.default_os_attributes()?;
+                let attributes = trace.default_attributes()?;
                 let range = context.payload_range.clone();
 
                 /*
