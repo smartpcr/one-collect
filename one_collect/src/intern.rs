@@ -74,6 +74,37 @@ impl<T: Copy + std::cmp::Eq + std::hash::Hash> InternedSlices<T> {
         }
     }
 
+    /// Attempts to find a slice and returns its ID.
+    ///
+    /// # Parameters
+    /// * `slice`: The slice of type `T` to be found.
+    ///
+    /// # Returns
+    /// * `Option<usize>`: The ID (index) of the interned slice as an option. None if not found.
+    pub fn find_id(
+        &self,
+        slice: &[T]) -> Option<usize> {
+        let mut hasher = XxHash64::default();
+        Hash::hash_slice(slice, &mut hasher);
+        let hash = hasher.finish();
+
+        let bucket_index = (hash & self.mask) as usize;
+        let chain = &self.buckets[bucket_index];
+        let len = slice.len();
+
+        for bucket in chain {
+            if bucket.hash == hash && bucket.len == len {
+                let span = &self.spans[bucket.index];
+                let items = &self.slices[span.start..span.end];
+                if items == slice {
+                    return Some(bucket.index);
+                }
+            }
+        }
+
+        None
+    }
+
     /// Interns a slice and returns its ID.
     ///
     /// # Parameters
@@ -273,6 +304,19 @@ impl InternedStrings {
         }
     }
 
+    /// Attempts to find a string and returns its ID.
+    ///
+    /// # Parameters
+    /// * `string`: The string to be found.
+    ///
+    /// # Returns
+    /// * `Option<usize>`: The ID (index) of the interned string as an option. None if not found.
+    pub fn find_id(
+        &self,
+        string: &str) -> Option<usize> {
+        self.strings.find_id(string.as_bytes())
+    }
+
     /// Interns a string and returns its ID.
     ///
     /// # Parameters
@@ -404,6 +448,10 @@ mod tests {
         });
 
         assert_eq!(2, count);
+
+        assert_eq!(id1, strings.find_id("1 2 3").unwrap());
+        assert_eq!(id2, strings.find_id("3 2 1").unwrap());
+        assert!(strings.find_id("Not here").is_none());
     }
 
     #[test]
