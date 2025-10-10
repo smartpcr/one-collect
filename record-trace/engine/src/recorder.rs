@@ -45,7 +45,10 @@ impl Recorder {
             return 1;
         }
 
-        let mut settings = ExportSettings::default();
+        let mut settings = ExportSettings::default()
+            .with_version_attributes()
+            .with_trace_context_attributes()
+            .with_activity_id_attributes();
 
         // CPU sampling.
         if self.args.on_cpu() {
