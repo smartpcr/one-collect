@@ -928,6 +928,9 @@ fn register_dotnet_tracepoint(
             let pid = trace.pid()?;
             let key = (pid as u64) << 32 | id as u64;
 
+            let mut activity_id = None;
+            let mut related_activity_id = None;
+
             match version {
                 1 => {
                     /* Decode extension */
@@ -936,8 +939,8 @@ fn register_dotnet_tracepoint(
 
                     nettrace::parse_event_extension_v1(
                         extension,
-                        |label, data| {
-                            if label == nettrace::LABEL_META {
+                        |label, data| { match label {
+                            nettrace::LABEL_META => {
                                 let meta = nettrace::MetaParserV5::parse(data);
 
                                 let mut info = LinuxDotNetEventInfo::default();
@@ -976,8 +979,19 @@ fn register_dotnet_tracepoint(
                                 }
 
                                 info_lookup.insert(key, info);
-                            }
-                        });
+                            },
+                            nettrace::LABEL_ACTIVITY => {
+                                if data.len() == 16 {
+                                    activity_id = data[0..16].try_into().ok();
+                                }
+                            },
+                            nettrace::LABEL_RELATED_ACTIVITY => {
+                                if data.len() == 16 {
+                                    related_activity_id = data[0..16].try_into().ok();
+                                }
+                            },
+                            _ => {},
+                        }});
                 },
                 _ => {},
             }
@@ -996,10 +1010,10 @@ fn register_dotnet_tracepoint(
                 }
             };
 
-            /* Provide a version if we have one */
-            if let Some(version) = &info.version {
-                trace.override_version(Some(*version as u16));
-            }
+            /* Setup overrides */
+            trace.override_version(info.version);
+            trace.override_activity_id(activity_id);
+            trace.override_related_activity_id(related_activity_id);
 
             if let Some(events) = events {
                 /* Proxy DotNet data to all proxy events */
@@ -1026,8 +1040,10 @@ fn register_dotnet_tracepoint(
                 }
             }
 
-            /* Always clear version override */
+            /* Always clear overrides */
             trace.override_version(None);
+            trace.override_activity_id(None);
+            trace.override_related_activity_id(None);
 
             Ok(())
         });
