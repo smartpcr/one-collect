@@ -274,6 +274,46 @@ impl ExportAttributeSource for TraceContextAttributeSource {
     }
 }
 
+#[derive(Default)]
+pub struct ActivityIdAttributeSource {
+    activity_str_id: usize,
+    related_activity_str_id: usize,
+}
+
+impl ExportAttributeSource for ActivityIdAttributeSource {
+    fn initialize(
+        &mut self,
+        machine: &mut ExportMachine) {
+        self.activity_str_id = machine.intern("ActivityId");
+        self.related_activity_str_id = machine.intern("RelatedActivityId");
+    }
+
+    fn add_attributes(
+        &mut self,
+        trace: &mut ExportTraceContext,
+        attributes: &mut ExportAttributes) -> anyhow::Result<()> {
+        if let Some(activity_id) = trace.activity_id()? {
+            let record_id = trace.record_data(0, &activity_id);
+
+            attributes.push(
+                ExportAttributePair::new(
+                    self.activity_str_id,
+                    ExportAttributeValue::Record(record_id)));
+        }
+
+        if let Some(related_activity_id) = trace.related_activity_id()? {
+            let record_id = trace.record_data(0, &related_activity_id);
+
+            attributes.push(
+                ExportAttributePair::new(
+                    self.related_activity_str_id,
+                    ExportAttributeValue::Record(record_id)));
+        }
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

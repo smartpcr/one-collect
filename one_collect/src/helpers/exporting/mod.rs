@@ -37,6 +37,7 @@ use attributes::ExportAttributePair;
 use attributes::ExportAttributeWalker;
 use attributes::VersionOpCodeAttributeSource;
 use attributes::TraceContextAttributeSource;
+use attributes::ActivityIdAttributeSource;
 
 pub mod span;
 use span::ExportSpan;
@@ -141,6 +142,8 @@ struct ExportSampler {
     op_code_override: Option<u16>,
     span_id_override: Option<[u8; 8]>,
     trace_id_override: Option<[u8; 16]>,
+    activity_id_override: Option<[u8; 16]>,
+    related_activity_id_override: Option<[u8; 16]>,
 }
 
 pub trait ExportSamplerOSHooks {
@@ -179,6 +182,14 @@ pub trait ExportSamplerOSHooks {
     fn os_event_trace_id(
         &self,
         data: &EventData) -> anyhow::Result<Option<[u8; 16]>>;
+
+    fn os_event_activity_id(
+        &self,
+        data: &EventData) -> anyhow::Result<Option<[u8; 16]>>;
+
+    fn os_event_related_activity_id(
+        &self,
+        data: &EventData) -> anyhow::Result<Option<[u8; 16]>>;
 }
 
 impl ExportSampler {
@@ -196,6 +207,8 @@ impl ExportSampler {
             op_code_override: None,
             span_id_override: None,
             trace_id_override: None,
+            activity_id_override: None,
+            related_activity_id_override: None,
             disable_callstacks: false,
         }
     }
@@ -222,6 +235,18 @@ impl ExportSampler {
         &mut self,
         trace_id: Option<[u8; 16]>) {
         self.trace_id_override = trace_id;
+    }
+
+    fn override_activity_id(
+        &mut self,
+        activity_id: Option<[u8; 16]>) {
+        self.activity_id_override = activity_id;
+    }
+
+    fn override_related_activity_id(
+        &mut self,
+        related_activity_id: Option<[u8; 16]>) {
+        self.related_activity_id_override = related_activity_id;
     }
 
     fn version(
@@ -257,6 +282,24 @@ impl ExportSampler {
         match self.trace_id_override {
             Some(trace_id) => Ok(Some(trace_id)),
             None => self.os_event_trace_id(data),
+        }
+    }
+
+    fn activity_id(
+        &self,
+        data: &EventData) -> anyhow::Result<Option<[u8; 16]>> {
+        match self.activity_id_override {
+            Some(activity_id) => Ok(Some(activity_id)),
+            None => self.os_event_activity_id(data),
+        }
+    }
+
+    fn related_activity_id(
+        &self,
+        data: &EventData) -> anyhow::Result<Option<[u8; 16]>> {
+        match self.related_activity_id_override {
+            Some(related_activity_id) => Ok(Some(related_activity_id)),
+            None => self.os_event_related_activity_id(data),
         }
     }
 
@@ -649,6 +692,14 @@ impl<'a> ExportTraceContext<'a> {
         self.sampler.borrow().trace_id(self.data)
     }
 
+    pub fn activity_id(&self) -> anyhow::Result<Option<[u8; 16]>> {
+        self.sampler.borrow().activity_id(self.data)
+    }
+
+    pub fn related_activity_id(&self) -> anyhow::Result<Option<[u8; 16]>> {
+        self.sampler.borrow().related_activity_id(self.data)
+    }
+
     pub fn record_type(
         &mut self,
         record_type: ExportRecordType) -> u16 {
@@ -717,6 +768,18 @@ impl<'a> ExportTraceContext<'a> {
         &mut self,
         span_id: Option<[u8; 8]>) {
         self.sampler.borrow_mut().override_span_id(span_id);
+    }
+
+    pub fn override_activity_id(
+        &mut self,
+        activity_id: Option<[u8; 16]>) {
+        self.sampler.borrow_mut().override_activity_id(activity_id);
+    }
+
+    pub fn override_related_activity_id(
+        &mut self,
+        related_activity_id: Option<[u8; 16]>) {
+        self.sampler.borrow_mut().override_related_activity_id(related_activity_id);
     }
 
     pub fn default_attributes(&mut self) -> anyhow::Result<Option<usize>> {
@@ -1050,6 +1113,11 @@ impl ExportSettings {
     pub fn with_trace_context_attributes(self) -> Self {
         self.with_attribute_source(
             Box::new(TraceContextAttributeSource::default()))
+    }
+
+    pub fn with_activity_id_attributes(self) -> Self {
+        self.with_attribute_source(
+            Box::new(ActivityIdAttributeSource::default()))
     }
 
     pub fn with_event(

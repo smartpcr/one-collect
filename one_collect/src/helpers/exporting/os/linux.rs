@@ -690,6 +690,18 @@ impl ExportSamplerOSHooks for ExportSampler {
         Ok(None)
     }
 
+    fn os_event_activity_id(
+        &self,
+        _data: &EventData) -> anyhow::Result<Option<[u8; 16]>> {
+        Ok(None)
+    }
+
+    fn os_event_related_activity_id(
+        &self,
+        _data: &EventData) -> anyhow::Result<Option<[u8; 16]>> {
+        Ok(None)
+    }
+
     fn os_event_callstack(
         &mut self,
         data: &EventData) -> anyhow::Result<()> {
