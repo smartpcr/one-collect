@@ -12,6 +12,7 @@ pub struct ExportAttributeWalker {
     ids: Vec<usize>,
     seen: HashSet<usize>,
     attributes: Vec<ExportAttributePair>,
+    filter: Option<Box<dyn Fn(&ExportAttributePair) -> bool>>,
 }
 
 impl ExportAttributeWalker {
@@ -28,7 +29,15 @@ impl ExportAttributeWalker {
     pub(crate) fn push_attributes(
         &mut self,
         attributes: &[ExportAttributePair]) {
-        self.attributes.extend_from_slice(attributes);
+        if let Some(filter) = &self.filter {
+            for attribute in attributes {
+                if filter(attribute) {
+                    self.attributes.push(*attribute);
+                }
+            }
+        } else {
+            self.attributes.extend_from_slice(attributes);
+        }
     }
 
     pub(crate) fn push_id(
@@ -37,6 +46,16 @@ impl ExportAttributeWalker {
         if self.seen.insert(attributes_id) {
             self.ids.push(attributes_id);
         }
+    }
+
+    pub fn with_filter(
+        self,
+        filter: impl Fn(&ExportAttributePair) -> bool + 'static) -> Self {
+        let mut clone = self;
+
+        clone.filter = Some(Box::new(filter));
+
+        clone
     }
 
     pub fn attributes(&self) -> &[ExportAttributePair] {
@@ -359,5 +378,34 @@ mod tests {
 
         assert!(walker.pop_id().is_none());
         assert!(walker.attributes().is_empty());
+
+        /* Ensure filtering */
+        let mut walker = ExportAttributeWalker::default()
+            .with_filter(|a| { a.name() < 3 });
+
+        let mut attributes = ExportAttributes::default();
+        attributes.push(ExportAttributePair {
+            name: 0,
+            value: ExportAttributeValue::Value(0),
+        });
+
+        attributes.push(ExportAttributePair {
+            name: 1,
+            value: ExportAttributeValue::Value(0),
+        });
+
+        attributes.push(ExportAttributePair {
+            name: 2,
+            value: ExportAttributeValue::Value(0),
+        });
+
+        /* Should get skipped */
+        attributes.push(ExportAttributePair {
+            name: 3,
+            value: ExportAttributeValue::Value(0),
+        });
+
+        walker.push_attributes(attributes.attributes());
+        assert_eq!(3, walker.attributes().len());
     }
 }
