@@ -1284,10 +1284,36 @@ impl NetTraceWriter {
         &mut self,
         machine: &ExportMachine) -> anyhow::Result<()> {
         let block_start = self.write_start_block()?;
-        let mut walker = ExportAttributeWalker::default();
+
+        let strings = machine.strings();
+        let activity_str_id = strings.find_id("ActivityId").unwrap_or(0);
+        let related_activity_str_id = strings.find_id("RelatedActivityId").unwrap_or(0);
+
+        let fn_activity_str_id = activity_str_id;
+        let fn_related_activity_str_id = related_activity_str_id;
+
+        let mut walker = ExportAttributeWalker::default()
+            .with_filter(move |attribute| {
+                /* Only keep supported attributes */
+                match attribute.attribute_value() {
+                    ExportAttributeValue::Label(_) => { true },
+                    ExportAttributeValue::Value(_) => { true },
+                    ExportAttributeValue::Record(_) => {
+                        if attribute.name() == 0 {
+                            return false;
+                        }
+
+                        if attribute.name() == fn_activity_str_id ||
+                            attribute.name() == fn_related_activity_str_id {
+                            return true;
+                        }
+
+                        false
+                    },
+                }
+            });
 
         let labels = self.take_saved_labels();
-        let strings = machine.strings();
 
         self.output.write_u32(1)?;
         self.output.write_u32(labels.len() as u32)?;
@@ -1332,8 +1358,36 @@ impl NetTraceWriter {
                         self.output.write_utf8(name)?;
                         self.output.write_varint(value)?;
                     },
-                    ExportAttributeValue::Record(_id) => {
-                        anyhow::bail!("Not yet supported.");
+                    ExportAttributeValue::Record(id) => {
+                        let record = machine.try_get_record_data(id).unwrap_or_default();
+                        let mut written = false;
+
+                        if record.len() == 16 {
+                            /* GUID based attributes */
+                            if attribute.name() == activity_str_id {
+                                self.output.write_u8(add_flag | 1)?;
+                                self.output.write_all(record)?;
+                                written = true;
+                            } else if attribute.name() == related_activity_str_id {
+                                self.output.write_u8(add_flag | 2)?;
+                                self.output.write_all(record)?;
+                                written = true;
+                            }
+                        }
+
+                        if !written {
+                            /*
+                             * Unexpected, Log Error in Attributes:
+                             * This is to prevent the file from being
+                             * potentially unreadable. If this is the
+                             * last attribute for example and we don't
+                             * write the add_flag for ending, the reader
+                             * will have errors.
+                             */
+                            self.output.write_u8(add_flag | 5)?;
+                            self.output.write_utf8("Error")?;
+                            self.output.write_utf8("Unknown Record Attribute")?;
+                        }
                     }
                 }
             }
