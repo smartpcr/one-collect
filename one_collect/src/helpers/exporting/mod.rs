@@ -1510,6 +1510,18 @@ impl ExportMachine {
             walker);
     }
 
+    pub fn try_get_record_data(
+        &self,
+        record_id: usize) -> Option<&[u8]> {
+        if record_id >= self.records.len() {
+            return None;
+        }
+
+        let record = &self.records[record_id];
+
+        Some(&self.record_data[record.start()..record.end()])
+    }
+
     pub fn sample_record_data(
         &self,
         sample: &ExportProcessSample) -> ExportRecordData {
