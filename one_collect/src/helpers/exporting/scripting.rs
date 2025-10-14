@@ -909,7 +909,7 @@ impl ScriptedUniversalExporter {
                         Ok(())
                     },
                     move |trace| {
-                        let attributes = trace.default_os_attributes()?;
+                        let attributes = trace.default_attributes()?;
 
                         trace
                             .sample_builder()
@@ -972,7 +972,7 @@ impl ScriptedUniversalExporter {
                             let sample_value = get_metric(sample_data)?;
 
                             if record_data {
-                                let attributes = trace.default_os_attributes()?;
+                                let attributes = trace.default_attributes()?;
 
                                 trace
                                     .sample_builder()

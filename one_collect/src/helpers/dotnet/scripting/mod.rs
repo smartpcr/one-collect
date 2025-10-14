@@ -229,7 +229,7 @@ impl DotNetScenario {
                     let value = closure(record_data)?;
 
                     if record {
-                        let attributes = trace.default_os_attributes()?;
+                        let attributes = trace.default_attributes()?;
 
                         trace
                             .sample_builder()

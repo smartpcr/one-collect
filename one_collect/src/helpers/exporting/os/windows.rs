@@ -149,6 +149,30 @@ impl ExportSamplerOSHooks for ExportSampler {
         Ok(Some(self.os.ancillary.borrow().op_code() as u16))
     }
 
+    fn os_event_span_id(
+        &self,
+        _data: &EventData) -> anyhow::Result<Option<[u8; 8]>> {
+        Ok(None)
+    }
+
+    fn os_event_trace_id(
+        &self,
+        _data: &EventData) -> anyhow::Result<Option<[u8; 16]>> {
+        Ok(None)
+    }
+
+    fn os_event_activity_id(
+        &self,
+        _data: &EventData) -> anyhow::Result<Option<[u8; 16]>> {
+        Ok(None)
+    }
+
+    fn os_event_related_activity_id(
+        &self,
+        _data: &EventData) -> anyhow::Result<Option<[u8; 16]>> {
+        Ok(None)
+    }
+
     fn os_event_callstack(
         &mut self,
         _data: &EventData) -> anyhow::Result<()> {

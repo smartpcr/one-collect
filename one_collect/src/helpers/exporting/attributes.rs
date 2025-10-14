@@ -1,15 +1,18 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
+use std::collections::hash_map::Entry::{Occupied, Vacant};
 
 use crate::intern::InternedStrings;
+use crate::helpers::exporting::*;
 
 #[derive(Default)]
 pub struct ExportAttributeWalker {
     ids: Vec<usize>,
     seen: HashSet<usize>,
     attributes: Vec<ExportAttributePair>,
+    filter: Option<Box<dyn Fn(&ExportAttributePair) -> bool>>,
 }
 
 impl ExportAttributeWalker {
@@ -26,7 +29,15 @@ impl ExportAttributeWalker {
     pub(crate) fn push_attributes(
         &mut self,
         attributes: &[ExportAttributePair]) {
-        self.attributes.extend_from_slice(attributes);
+        if let Some(filter) = &self.filter {
+            for attribute in attributes {
+                if filter(attribute) {
+                    self.attributes.push(*attribute);
+                }
+            }
+        } else {
+            self.attributes.extend_from_slice(attributes);
+        }
     }
 
     pub(crate) fn push_id(
@@ -35,6 +46,16 @@ impl ExportAttributeWalker {
         if self.seen.insert(attributes_id) {
             self.ids.push(attributes_id);
         }
+    }
+
+    pub fn with_filter(
+        self,
+        filter: impl Fn(&ExportAttributePair) -> bool + 'static) -> Self {
+        let mut clone = self;
+
+        clone.filter = Some(Box::new(filter));
+
+        clone
     }
 
     pub fn attributes(&self) -> &[ExportAttributePair] {
@@ -75,6 +96,7 @@ impl ExportAttributes {
 pub enum ExportAttributeValue {
     Label(usize),
     Value(u64),
+    Record(usize),
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -93,7 +115,17 @@ impl ExportAttributePair {
         }
     }
 
-    pub fn new_label(
+    pub(crate) fn new_record(
+        name: &str,
+        record_id: usize,
+        strings: &mut InternedStrings) -> Self {
+        Self {
+            name: strings.to_id(name),
+            value: ExportAttributeValue::Record(record_id),
+        }
+    }
+
+    pub(crate) fn new_label(
         name: &str,
         label: &str,
         strings: &mut InternedStrings) -> Self {
@@ -103,7 +135,7 @@ impl ExportAttributePair {
         }
     }
 
-    pub fn new_value(
+    pub(crate) fn new_value(
         name: &str,
         value: u64,
         strings: &mut InternedStrings) -> Self {
@@ -152,7 +184,153 @@ impl ExportAttributePair {
         }
     }
 
+    pub fn record_id(&self) -> Option<usize> {
+        match self.value {
+            ExportAttributeValue::Record(id) => { Some(id) },
+            _ => { None },
+        }
+    }
+
     pub fn attribute_value(&self) -> ExportAttributeValue { self.value }
+}
+
+#[derive(Default)]
+pub struct VersionOpCodeAttributeSource {
+    attributes_cache: HashMap<u32, usize>,
+    version_str_id: usize,
+    op_code_str_id: usize,
+}
+
+impl ExportAttributeSource for VersionOpCodeAttributeSource {
+    fn initialize(
+        &mut self,
+        machine: &mut ExportMachine) {
+        self.version_str_id = machine.intern("Version");
+        self.op_code_str_id = machine.intern("OpCode");
+    }
+
+    fn add_attributes(
+        &mut self,
+        trace: &mut ExportTraceContext,
+        attributes: &mut ExportAttributes) -> anyhow::Result<()> {
+        let version = trace.version()?.unwrap_or(0);
+        let op_code = trace.op_code()?.unwrap_or(0);
+        let lookup_id = (version as u32) << 16 | op_code as u32;
+
+        /* Lookup attributes by version + op_code pair */
+        if lookup_id != 0 {
+            let attribute_id = match self.attributes_cache.entry(lookup_id) {
+                Vacant(entry) => {
+                    /* New pair, get new attribute ID for this */
+                    let mut attributes = ExportAttributes::default();
+
+                    attributes.push(
+                        ExportAttributePair::new(
+                            self.version_str_id,
+                            ExportAttributeValue::Value(version as u64)));
+
+                    attributes.push(
+                        ExportAttributePair::new(
+                            self.op_code_str_id,
+                            ExportAttributeValue::Value(op_code as u64)));
+
+                    let id = trace.push_unique_attributes(attributes);
+
+                    entry.insert(id);
+
+                    id
+                },
+                Occupied(entry) => {
+                    /* Existing pair, use existing ID */
+                    *entry.get()
+                },
+            };
+
+            attributes.push_association(attribute_id);
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct TraceContextAttributeSource {
+    trace_str_id: usize,
+    span_str_id: usize,
+}
+
+impl ExportAttributeSource for TraceContextAttributeSource {
+    fn initialize(
+        &mut self,
+        machine: &mut ExportMachine) {
+        self.trace_str_id = machine.intern("TraceId");
+        self.span_str_id = machine.intern("SpanId");
+    }
+
+    fn add_attributes(
+        &mut self,
+        trace: &mut ExportTraceContext,
+        attributes: &mut ExportAttributes) -> anyhow::Result<()> {
+        if let Some(trace_id) = trace.trace_id()? {
+            let record_id = trace.record_data(0, &trace_id);
+
+            attributes.push(
+                ExportAttributePair::new(
+                    self.trace_str_id,
+                    ExportAttributeValue::Record(record_id)));
+        }
+
+        if let Some(span_id) = trace.span_id()? {
+            let record_id = trace.record_data(0, &span_id);
+
+            attributes.push(
+                ExportAttributePair::new(
+                    self.span_str_id,
+                    ExportAttributeValue::Record(record_id)));
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct ActivityIdAttributeSource {
+    activity_str_id: usize,
+    related_activity_str_id: usize,
+}
+
+impl ExportAttributeSource for ActivityIdAttributeSource {
+    fn initialize(
+        &mut self,
+        machine: &mut ExportMachine) {
+        self.activity_str_id = machine.intern("ActivityId");
+        self.related_activity_str_id = machine.intern("RelatedActivityId");
+    }
+
+    fn add_attributes(
+        &mut self,
+        trace: &mut ExportTraceContext,
+        attributes: &mut ExportAttributes) -> anyhow::Result<()> {
+        if let Some(activity_id) = trace.activity_id()? {
+            let record_id = trace.record_data(0, &activity_id);
+
+            attributes.push(
+                ExportAttributePair::new(
+                    self.activity_str_id,
+                    ExportAttributeValue::Record(record_id)));
+        }
+
+        if let Some(related_activity_id) = trace.related_activity_id()? {
+            let record_id = trace.record_data(0, &related_activity_id);
+
+            attributes.push(
+                ExportAttributePair::new(
+                    self.related_activity_str_id,
+                    ExportAttributeValue::Record(record_id)));
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -200,5 +378,34 @@ mod tests {
 
         assert!(walker.pop_id().is_none());
         assert!(walker.attributes().is_empty());
+
+        /* Ensure filtering */
+        let mut walker = ExportAttributeWalker::default()
+            .with_filter(|a| { a.name() < 3 });
+
+        let mut attributes = ExportAttributes::default();
+        attributes.push(ExportAttributePair {
+            name: 0,
+            value: ExportAttributeValue::Value(0),
+        });
+
+        attributes.push(ExportAttributePair {
+            name: 1,
+            value: ExportAttributeValue::Value(0),
+        });
+
+        attributes.push(ExportAttributePair {
+            name: 2,
+            value: ExportAttributeValue::Value(0),
+        });
+
+        /* Should get skipped */
+        attributes.push(ExportAttributePair {
+            name: 3,
+            value: ExportAttributeValue::Value(0),
+        });
+
+        walker.push_attributes(attributes.attributes());
+        assert_eq!(3, walker.attributes().len());
     }
 }
