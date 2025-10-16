@@ -575,11 +575,16 @@ struct LinuxDotNetProviderContext<'a> {
 }
 
 impl<'a> LinuxDotNetProviderContext<'a> {
-    fn format_key(&self) -> usize {
-        let name_id = self.info.name_id.unwrap_or(0);
-        let format_id = self.info.format_index.unwrap_or(0);
+    fn format_key(&self) -> u64 {
+        /*
+         * If we have a name use that, otherwise use the
+         * actual event ID with the top bit set so we
+         * don't collide with name IDs.
+         */
+        let id = self.info.name_id.unwrap_or(1 << 31 | self.id) as u64;
+        let format_id = self.info.format_index.unwrap_or(0) as u64;
 
-        name_id << 32 | format_id
+        id << 32 | format_id
     }
 
     fn self_describing_format(&self) -> Option<&EventFormat> {
@@ -957,11 +962,19 @@ fn register_dotnet_tracepoint(
                                     /* Read event name */
                                     meta.event_name(&mut name_buf);
 
-                                    info.name_id = Some(event_names.to_id(&name_buf));
+                                    /*
+                                     * Only set name_id and logical_id if we have a name:
+                                     * We need to know later if this event was a dynamic
+                                     * event or a manifest event. The name_id being Some
+                                     * vs None indicates this.
+                                     */
+                                    if !name_buf.is_empty() {
+                                        info.name_id = Some(event_names.to_id(&name_buf));
 
-                                    /* Lookup event name and return logical event ID */
-                                    if let Some(id) = provider.named_events.get(&name_buf) {
-                                        info.logical_id = Some(*id);
+                                        /* Lookup event name and return logical event ID */
+                                        if let Some(id) = provider.named_events.get(&name_buf) {
+                                            info.logical_id = Some(*id);
+                                        }
                                     }
 
                                     info.format_index = match format_lookup.get(meta.fields()) {
