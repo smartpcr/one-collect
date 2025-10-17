@@ -747,9 +747,9 @@ fn get_pe_info(
                     /* Read data at found file offset */
                     let mut block_array = [0u8; 4096];
                     let block_size = std::cmp::min(data.size, 4096);
-                    let mut slice = &mut block_array[..block_size as usize];
                     reader.seek(SeekFrom::Start(data_offset))?;
-                    reader.read_exact(&mut slice)?;
+                    reader.read_exact(&mut block_array[..block_size as usize])?;
+                    let mut slice = &block_array[..block_size as usize];
 
                     let mut product: Option<String> = None;
                     let mut file_ver: Option<String> = None;
@@ -812,7 +812,7 @@ fn get_pe_info(
                            break;
                         }
 
-                        slice = &mut slice[total_len..];
+                        slice = &slice[total_len..];
                     }
 
                     /* Must have a file description */
