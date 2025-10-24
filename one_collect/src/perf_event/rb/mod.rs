@@ -171,7 +171,8 @@ impl RingBufBuilder {
                 FLAG_SAMPLE_ID_ALL |
                 FLAG_DISABLED |
                 FLAG_EXCLUDE_HV |
-                FLAG_EXCLUDE_IDLE,
+                FLAG_EXCLUDE_IDLE |
+                FLAG_INHERIT,
             clockid: CLOCK_MONOTONIC_RAW,
             read_format: abi::PERF_FORMAT_ID,
             sample_type: abi::PERF_SAMPLE_IDENTIFIER |
