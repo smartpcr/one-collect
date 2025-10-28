@@ -269,6 +269,18 @@ impl Drop for PerfSession {
 impl PerfSession {
     pub fn new(
         source: Box<dyn PerfDataSource>) -> Self {
+        /* Increase rlimit for open files */
+        unsafe {
+            let mut limit = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+
+            if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 {
+                limit.rlim_cur = limit.rlim_max;
+                libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
+            }
+        }
 
         let session = Self {
             source,

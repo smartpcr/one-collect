@@ -463,6 +463,24 @@ impl RingBufDataSource {
         Ok(())
     }
 
+    fn tasks_for_pids(pids: &mut Vec<i32>) {
+        let mut tasks = HashSet::new();
+
+        /* Find all unique tasks IDs */
+        for pid in pids.drain(..) {
+            tasks.insert(pid);
+
+            procfs::iter_proc_tasks(
+                pid as u32,
+                |task| { tasks.insert(task as i32); });
+        }
+
+        /* Update PIDs with unique tasks */
+        for task in tasks.drain() {
+            pids.push(task);
+        }
+    }
+
     fn build(&mut self) -> IOResult<()> {
         /* Always required */
         let common = self.kernel_builder
@@ -471,8 +489,15 @@ impl RingBufDataSource {
 
         let empty_pids = Vec::new();
 
-        let pids = match &self.target_pids {
-            Some(pids) => { pids },
+        let target_pids = &mut self.target_pids.as_mut();
+
+        let pids = match target_pids {
+            Some(pids) => {
+                /* Populate current tasks for PIDs */
+                Self::tasks_for_pids(pids);
+
+                pids
+            },
             None => { &empty_pids },
         };
 

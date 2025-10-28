@@ -265,6 +265,52 @@ pub fn ns_pid(
     None
 }
 
+/// Iterates over the current tasks within a process.
+///
+/// # Parameters
+///
+/// * `pid`: The process ID for which to iterate over.
+/// * `callback`: A mutable closure that takes a `u32` reference as its argument and returns nothing.
+///     This closure is called for each task.
+///
+pub fn iter_proc_tasks(
+    pid: u32,
+    mut callback: impl FnMut(u32)) {
+    let mut path_buf = PathBuf::new();
+    path_buf.push("/proc");
+    path_buf.push_u32(pid);
+    path_buf.push("task");
+
+    let dirs = fs::read_dir(path_buf);
+
+    if let Ok(dirs) = dirs {
+        for entry in dirs {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+
+                if path.components().count() == 5 {
+                    let mut iter = path.iter();
+
+                    iter.next(); // "/"
+                    iter.next(); // "proc"
+                    iter.next(); // "<pid>"
+                    iter.next(); // "task"
+
+                    if let Some(task_str) = iter.next() { // "<task>"
+                        let s = task_str.to_str().unwrap();
+
+                        if let Ok(task) = s.parse::<u32>() {
+                            if task != pid {
+                                (callback)(task);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Iterates over the memory modules of a process and applies a callback function to each module.
 ///
 /// The function reads the `/proc/{pid}/maps` file to get the list of memory modules.
