@@ -260,6 +260,62 @@ impl OSScriptEngine {
                 Err(err) => { Err(format!("Error: {}", err).into()) },
             }
         });
+
+        let fn_tracefs = tracefs.clone();
+        let fn_cleanup = self.probe_cleanups.clone();
+
+        engine.register_fn(
+            "event_from_fprobe",
+            move |
+            system: String,
+            name: String,
+            symbol: String,
+            args: String| -> Result<ScriptEvent, Box<EvalAltResult>> {
+            let command = format!(
+                "f:{}/{} {} {}",
+                &system,
+                &name,
+                &symbol,
+                &args);
+
+            match Self::event_from_probe(fn_tracefs.clone(), &system, &name, &command) {
+                Ok(event) => {
+                    fn_cleanup.borrow_mut().push(
+                        format!("-:{}/{}", system, name));
+
+                    Ok(event.into())
+                },
+                Err(err) => { Err(format!("Error: {}", err).into()) },
+            }
+        });
+
+        let fn_tracefs = tracefs.clone();
+        let fn_cleanup = self.probe_cleanups.clone();
+
+        engine.register_fn(
+            "event_from_tprobe",
+            move |
+            system: String,
+            name: String,
+            tracepoint: String,
+            args: String| -> Result<ScriptEvent, Box<EvalAltResult>> {
+            let command = format!(
+                "t:{}/{} {} {}",
+                &system,
+                &name,
+                &tracepoint,
+                &args);
+
+            match Self::event_from_probe(fn_tracefs.clone(), &system, &name, &command) {
+                Ok(event) => {
+                    fn_cleanup.borrow_mut().push(
+                        format!("-:{}/{}", system, name));
+
+                    Ok(event.into())
+                },
+                Err(err) => { Err(format!("Error: {}", err).into()) },
+            }
+        });
     }
 
     pub fn cleanup_task(&mut self) -> Box<dyn FnMut()> {
