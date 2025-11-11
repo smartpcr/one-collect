@@ -5,6 +5,7 @@ use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
 use std::fmt;
 
 use crate::elf::*;
+use tracing::{debug, trace, info};
 
 const VALUE_TYPE_OFFSET: u8 = 0;
 const VALUE_TYPE_REG: u8 = 1;
@@ -216,6 +217,7 @@ impl FrameOffset {
             }
         }
 
+        trace!("CFA unwound: rva={:#x}, cfa_reg={}, cfa_off={}, off_mask={:#x}", rva, cfa_data.reg, cfa_data.off, cfa_data.off_mask);
         cfa_data
     }
 
@@ -356,6 +358,8 @@ impl FrameOffset {
         reader: &mut (impl Read + Seek),
         fde_buf: &mut Vec<u8>,
         cie_buf: &mut Vec<u8>) -> Result<(), Error> {
+        debug!("Loading DWARF frame rules: fde={:#x}", self.fde);
+        
         /* Mark invalid in case of error(s) */
         self.mark_invalid();
 
@@ -366,6 +370,7 @@ impl FrameOffset {
             fde_buf)?;
 
         if fde_len < 8 {
+            debug!("FDE too small: len={}", fde_len);
             return Err(
                 error("FDE too small"));
         }
@@ -377,12 +382,14 @@ impl FrameOffset {
 
         /* Not valid */
         if cie_offset == 0 {
+            debug!("Invalid CIE offset");
             return Err(
                 error("Invalid CIE offset"));
         }
 
         /* CIE is back from current pos */
         let cie_pos = (self.fde + 4) - cie_offset as u64;
+        debug!("Reading CIE: pos={:#x}", cie_pos);
 
         /* Move to CIE and load */
         reader.seek(SeekFrom::Start(cie_pos))?;
@@ -448,6 +455,7 @@ impl FrameOffset {
 
         /* Valid at this point */
         self.mark_valid();
+        debug!("Frame rules loaded successfully: frame_state_count={}", self.frame_states.len());
         Ok(())
     }
 
@@ -783,6 +791,8 @@ impl FrameOffset {
         eh_offset: u64,
         offsets: &mut Vec<FrameOffset>,
         buf: &mut Vec<u8>) -> Result<(), Error> {
+        debug!("Parsing location table: offset={:#x}, size={}", metadata.offset, metadata.size);
+        
         let mut cursor: usize = 0;
         /* Move to section */
         reader.seek(SeekFrom::Start(metadata.offset))?;
@@ -793,6 +803,7 @@ impl FrameOffset {
         /* Validate header */
         if buf[0] != 1 {
             /* Unknown version, skip */
+            debug!("Unknown location table version: {}", buf[0]);
             return Ok(());
         }
 
@@ -807,12 +818,14 @@ impl FrameOffset {
            table_enc == DW_EH_PE_OMIT
         {
             /* Not available, skip */
+            debug!("Location table encoding omitted");
             return Ok(());
         }
 
         let data: i64 = metadata.offset as i64;
         let sec_ptr = read_value(section_enc, data, buf, &mut cursor)? as u64;
         let count = read_value(count_enc, data, buf, &mut cursor)?;
+        debug!("Location table entries: count={}", count);
 
         for _ in 0..count {
             let rva = read_value(table_enc, data, buf, &mut cursor)? as u64;
@@ -826,6 +839,7 @@ impl FrameOffset {
                     fde));
         }
 
+        info!("Location table parsed successfully: entry_count={}", count);
         Ok(())
     }
 }
@@ -869,6 +883,8 @@ impl FrameHeaderTable {
         &mut self,
         reader: &mut (impl Read + Seek),
         frame_offsets: &mut Vec<FrameOffset>) -> Result<(), Error> {
+        debug!("Parsing frame header table");
+        
         self.metadata_buf.clear();
         get_section_metadata(
             reader,
@@ -884,6 +900,7 @@ impl FrameHeaderTable {
                 ".eh_frame",
                 &mut self.cie_buf) {
                 eh_offset = sec.offset;
+                debug!("Found .eh_frame section: offset={:#x}", eh_offset);
 
                 break;
             }
@@ -894,6 +911,7 @@ impl FrameHeaderTable {
                 reader,
                 ".eh_frame_hdr",
                 &mut self.cie_buf) {
+                debug!("Found .eh_frame_hdr section: offset={:#x}", sec.offset);
                 /* Load in location table */
                 FrameOffset::parse_loc_table(
                     reader,
@@ -905,6 +923,7 @@ impl FrameHeaderTable {
             }
         }
 
+        info!("Frame header table parsed: offset_count={}", frame_offsets.len());
         Ok(())
     }
 }

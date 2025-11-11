@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 use super::*;
+use tracing::{debug, warn, info, error};
 
 impl Machine {
     pub fn new() -> Self { Self::default() }
@@ -12,10 +13,12 @@ impl Machine {
         process: Process) -> bool {
         match self.processes.entry(pid) {
             Vacant(entry) => {
+                debug!("Process added: pid={}", pid);
                 entry.insert(process);
                 true
             },
             Occupied(_) => {
+                warn!("Process addition failed: pid={} already exists", pid);
                 false
             }
         }
@@ -28,8 +31,14 @@ impl Machine {
         let child: Process;
 
         match self.find_process(ppid) {
-            Some(parent) => { child = parent.fork(); },
-            None => { return false },
+            Some(parent) => {
+                debug!("Process forked: pid={}, ppid={}", pid, ppid);
+                child = parent.fork();
+            },
+            None => {
+                warn!("Process fork failed: ppid={} not found", ppid);
+                return false
+            },
         }
 
         self.add_process(pid, child)
@@ -45,8 +54,14 @@ impl Machine {
         &mut self,
         pid: u32) -> bool {
         match self.processes.remove(&pid) {
-            Some(_) => { true },
-            None => { false },
+            Some(_) => {
+                debug!("Process removed: pid={}", pid);
+                true
+            },
+            None => {
+                warn!("Process removal failed: pid={} not found", pid);
+                false
+            },
         }
     }
 
@@ -62,6 +77,8 @@ impl Machine {
         stack_data: &[u8],
         stack_frames: &mut Vec<u64>) -> UnwindResult {
         let mut result = UnwindResult::new();
+
+        debug!("Starting unwind: pid={}, rip={:#x}, rbp={:#x}, rsp={:#x}", pid, rip, rbp, rsp);
 
         /* Reset unwinder */
         unwinder.reset(
@@ -85,9 +102,15 @@ impl Machine {
                     stack_data,
                     stack_frames,
                     &mut result);
+
+                info!("Unwind completed: pid={}, frames_pushed={}", pid, result.frames_pushed);
+                if let Some(error) = result.error {
+                    debug!("Unwind stopped with error: {}", error);
+                }
             },
             None => {
                 /* Process not mapped */
+                error!("Process not found for unwinding: pid={}", pid);
                 result.error = Some("Process not mapped");
             },
         }
