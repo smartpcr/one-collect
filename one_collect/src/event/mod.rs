@@ -92,6 +92,10 @@ impl DataFieldRef {
         /* Get a copy of the field at this point in time */
         let field = self.get();
 
+        if data.len() < field.end() {
+            return EMPTY;
+        }
+
         /* Use it to slice the data */
         &data[field.start() .. field.end()]
     }
@@ -107,6 +111,10 @@ impl DataFieldRef {
         &self,
         data: &[u8]) -> Result<u64, anyhow::Error> {
         let slice = self.get_data(data);
+
+        if slice.len() < 8 {
+            anyhow::bail!("Not enough data.");
+        }
 
         Ok(u64::from_ne_bytes(slice[0..8].try_into()?))
     }
@@ -143,6 +151,10 @@ impl DataFieldRef {
         data: &[u8]) -> Result<u32, anyhow::Error> {
         let slice = self.get_data(data);
 
+        if slice.len() < 4 {
+            anyhow::bail!("Not enough data.");
+        }
+
         Ok(u32::from_ne_bytes(slice[0..4].try_into()?))
     }
 
@@ -177,6 +189,10 @@ impl DataFieldRef {
         &self,
         data: &[u8]) -> Result<u16, anyhow::Error> {
         let slice = self.get_data(data);
+
+        if slice.len() < 2 {
+            anyhow::bail!("Not enough data.");
+        }
 
         Ok(u16::from_ne_bytes(slice[0..2].try_into()?))
     }
@@ -214,7 +230,7 @@ impl DataFieldRef {
         let slice = self.get_data(data);
 
         if slice.is_empty() {
-            anyhow::bail!("No data");
+            anyhow::bail!("Not enough data.");
         }
 
         Ok(slice[0])
@@ -1323,15 +1339,27 @@ impl EventFormat {
             anyhow::bail!("Field size must be 4");
         }
 
-        let rel_loc = u32::from_ne_bytes(data[field.offset..field.offset+4].try_into()?);
+        let start = field.offset;
+        let end = start+4;
 
-        let mut offset = field.offset;
-        offset += 4;
-        offset += (rel_loc & 0xFFFF) as usize;
+        if data.len() < end {
+            anyhow::bail!("Not enough data.");
+        }
+
+        let rel_loc = u32::from_ne_bytes(data[start..end].try_into()?);
+
+        let mut start = start;
+        start += 4;
+        start += (rel_loc & 0xFFFF) as usize;
 
         let length = (rel_loc >> 16) as usize;
+        let end = start + length;
 
-        Ok(offset .. offset + length)
+        if data.len() < end {
+            anyhow::bail!("Not enough data.");
+        }
+
+        Ok(start .. end)
     }
 
     /// Retrieves the value of a specified field from the event data as a 64-bit unsigned integer.
@@ -1351,6 +1379,10 @@ impl EventFormat {
         field_ref: EventFieldRef,
         data: &[u8]) -> Result<u64, anyhow::Error> {
         let slice = self.get_data(field_ref, data);
+
+        if slice.len() < 8 {
+            anyhow::bail!("Not enough data.");
+        }
 
         Ok(u64::from_ne_bytes(slice[0..8].try_into()?))
     }
@@ -1399,6 +1431,10 @@ impl EventFormat {
         data: &[u8]) -> Result<u32, anyhow::Error> {
         let slice = self.get_data(field_ref, data);
 
+        if slice.len() < 4 {
+            anyhow::bail!("Not enough data.");
+        }
+
         Ok(u32::from_ne_bytes(slice[0..4].try_into()?))
     }
 
@@ -1445,6 +1481,10 @@ impl EventFormat {
         field_ref: EventFieldRef,
         data: &[u8]) -> Result<u16, anyhow::Error> {
         let slice = self.get_data(field_ref, data);
+
+        if slice.len() < 2 {
+            anyhow::bail!("Not enough data.");
+        }
 
         Ok(u16::from_ne_bytes(slice[0..2].try_into()?))
     }
@@ -1493,7 +1533,9 @@ impl EventFormat {
         data: &[u8]) -> Result<u8, anyhow::Error> {
         let slice = self.get_data(field_ref, data);
 
-        if slice.is_empty() { anyhow::bail!("No data"); }
+        if slice.is_empty() {
+            anyhow::bail!("Not enough data.");
+        }
 
         Ok(slice[0])
     }
