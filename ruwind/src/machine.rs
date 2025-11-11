@@ -2,7 +2,7 @@
 // Licensed under the MIT license.
 
 use super::*;
-use tracing::{debug, warn, info, error};
+use tracing::{debug, warn, error, trace};
 
 impl Machine {
     pub fn new() -> Self { Self::default() }
@@ -18,7 +18,7 @@ impl Machine {
                 true
             },
             Occupied(_) => {
-                warn!("Process addition failed: pid={} already exists", pid);
+                debug!("Process already exists: pid={}", pid);
                 false
             }
         }
@@ -78,7 +78,7 @@ impl Machine {
         stack_frames: &mut Vec<u64>) -> UnwindResult {
         let mut result = UnwindResult::new();
 
-        debug!("Starting unwind: pid={}, rip={:#x}, rbp={:#x}, rsp={:#x}", pid, rip, rbp, rsp);
+        trace!("Starting unwind: pid={}, rip={:#x}, rbp={:#x}, rsp={:#x}", pid, rip, rbp, rsp);
 
         /* Reset unwinder */
         unwinder.reset(
@@ -103,7 +103,7 @@ impl Machine {
                     stack_frames,
                     &mut result);
 
-                info!("Unwind completed: pid={}, frames_pushed={}", pid, result.frames_pushed);
+                trace!("Unwind completed: pid={}, frames_pushed={}", pid, result.frames_pushed);
                 if let Some(error) = result.error {
                     debug!("Unwind stopped with error: {}", error);
                 }
