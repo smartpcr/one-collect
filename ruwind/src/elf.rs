@@ -8,6 +8,7 @@ use std::mem::{zeroed, size_of};
 use std::slice;
 use cpp_demangle::{DemangleOptions, Symbol};
 use rustc_demangle::try_demangle;
+use tracing::{error, warn, info, debug, trace};
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 
@@ -137,7 +138,6 @@ pub struct ElfSymbolIterator<'a> {
 
 impl<'a> ElfSymbolIterator<'a> {
     pub fn new(file: File, load_header: ElfLoadHeader, system_page_size: u64) -> Self {
-
         Self {
             phantom: std::marker::PhantomData,
             reader: BufReader::new(file),
@@ -173,6 +173,7 @@ impl<'a> ElfSymbolIterator<'a> {
 
         // Initialize and re-clear if initialization fails.
         if self.initialize().is_err() {
+            warn!("ElfSymbolIterator initialization failed during reset");
             clear(self);
         }
     }
@@ -186,6 +187,7 @@ impl<'a> ElfSymbolIterator<'a> {
         get_section_metadata(&mut self.reader, None, SHT_DYNSYM, &mut self.sections)?;
         get_section_offsets(&mut self.reader, None, &mut self.section_offsets)?;
 
+        debug!("ElfSymbolIterator initialized: section_count={}", self.sections.len());
         Ok(())
     }
 
@@ -325,10 +327,15 @@ fn get_symbol32(
     symbol: &mut ElfSymbol) -> Result<(), Error> {
     let mut sym = ElfSymbol32::default();
     let pos = metadata.offset + (sym_index * metadata.entry_size);
+    debug!("Reading symbol32: sym_index={}, offset={:#x}", sym_index, pos);
     reader.seek(SeekFrom::Start(pos))?;
     read_symbol32(reader, &mut sym)?;
 
     if !sym.is_function() || sym.st_value == 0 || sym.st_size == 0 {
+        trace!(
+            "Skipping invalid symbol32: sym_index={}, is_function={}, st_value={:#x}, st_size={}", 
+            sym_index, sym.is_function(), sym.st_value, sym.st_size
+        );
         return Err(Error::new(std::io::ErrorKind::InvalidData, "Invalid symbol"));
     }
 
@@ -336,6 +343,7 @@ fn get_symbol32(
     symbol.end = symbol.start + (sym.st_size as u64 - 1);
     let str_pos = sym.st_name as u64 + str_offset;
 
+    debug!("Reading symbol32 name: str_pos={:#x}", str_pos);
     reader.seek(SeekFrom::Start(str_pos))?;
     symbol.name_len = reader.read(&mut symbol.name_buf[..])?;
 
@@ -380,10 +388,15 @@ fn get_symbol64(
     symbol: &mut ElfSymbol) -> Result<(), Error> {
     let mut sym = ElfSymbol64::default();
     let pos = metadata.offset + (sym_index * metadata.entry_size);
+    debug!("Reading symbol64: sym_index={}, offset={:#x}", sym_index, pos);
     reader.seek(SeekFrom::Start(pos))?;
     read_symbol64(reader, &mut sym)?;
 
     if !sym.is_function() || sym.st_value == 0 || sym.st_size == 0 {
+        trace!(
+            "Skipping invalid symbol64: sym_index={}, is_function={}, st_value={:#x}, st_size={}", 
+            sym_index, sym.is_function(), sym.st_value, sym.st_size
+        );
         return Err(Error::new(std::io::ErrorKind::InvalidData, "Invalid symbol"));
     }
 
@@ -391,6 +404,7 @@ fn get_symbol64(
     symbol.end = symbol.start + (sym.st_size - 1);
     let str_pos = sym.st_name as u64 + str_offset;
 
+    debug!("Reading symbol64 name: str_pos={:#x}", str_pos);
     reader.seek(SeekFrom::Start(str_pos))?;
     symbol.name_len = reader.read(&mut symbol.name_buf)?;
 
@@ -449,6 +463,8 @@ pub fn get_symbols(
             str_offset = offsets[m.link as usize];
         }
 
+        debug!("Processing section: type={}, offset={:#x}, size={}, entry_count={}", m.sec_type, m.offset, m.size, count);
+
         match m.class {
             ELFCLASS32 => {
                 get_symbols32(reader, load_header, system_page_mask, m, count, str_offset, &mut callback)?;
@@ -457,7 +473,7 @@ pub fn get_symbols(
                 get_symbols64(reader, load_header, system_page_mask, m, count, str_offset, &mut callback)?;
             },
             _ => {
-                /* Unknown, no symbols */
+                warn!("Unknown ELF class: class={}", m.class);
             },
         }
     }
@@ -481,7 +497,7 @@ pub fn get_symbol(
             return get_symbol64(reader, metadata, sym_index, str_offset, load_header, system_page_mask, symbol);
         }
         _ => {
-            /* Unknown, no symbols */
+            warn!("Unknown ELF class for symbol: class={}", metadata.class);
         },
     }
     Ok(())
@@ -513,7 +529,7 @@ pub fn get_section_offsets(
             get_section_offsets64(reader, offsets)
         },
         _ => {
-            /* Unknown, no offsets */
+            warn!("Unknown ELF class for section offsets: class={}", class);
             Ok(())
         },
     }
@@ -560,7 +576,7 @@ pub fn enum_section_metadata(
                 reader, sec_type, metadata)
         },
         _ => {
-            /* Unknown, no metadata */
+            warn!("Unknown ELF class for section metadata: class={}", class);
             Ok(())
         },
     }
@@ -578,6 +594,7 @@ pub fn read_section_name<'a>(
     }
 
     let str_pos = section.name_offset + str_offset;
+    debug!("Reading section name: str_pos={:#x}", str_pos);
     reader.seek(SeekFrom::Start(str_pos))?;
 
     let mut name = "";
@@ -625,18 +642,20 @@ pub fn read_build_id<'a>(
     sections: &Vec<SectionMetadata>,
     section_offsets: &Vec<u64>,
     buf: &'a mut [u8; 20]) -> Result<Option<&'a [u8; 20]>, Error> {
-    
     for section in sections {
         let mut name_buf: [u8; 1024] = [0; 1024];
         if let Ok(name) = read_section_name(reader, section, section_offsets, &mut name_buf) {
             if name == ".note.gnu.build-id" {
+                debug!("Found build-id section: offset={:#x}, size={}", section.offset, section.size);
                 let _len = seek_to_note_data(reader, section)?;
                 reader.read(&mut buf[0..])?;
+                info!("Build-id retrieved successfully");
                 return Ok(Some(buf));
             }
         }
     }
 
+    info!("Build-id not found in ELF file");
     Ok(None)
 }
 
@@ -651,21 +670,24 @@ pub fn read_package_metadata(
     sections: &Vec<SectionMetadata>,
     section_offsets: &Vec<u64>,
     buf: &mut Vec<u8>) -> Result<(), Error> {
-
     for section in sections {
         let mut name_buf: [u8; 1024] = [0; 1024];
         if let Ok(name) = read_section_name(reader, section, section_offsets, &mut name_buf) {
             if name == ".note.package" {
+                debug!("Found package metadata section: offset={:#x}, size={}", section.offset, section.size);
                 let len = seek_to_note_data(reader, section)?;
 
                 buf.clear();
                 buf.resize(len, 0);
 
-                return reader.read_exact(&mut buf[0..]);
+                reader.read_exact(&mut buf[0..])?;
+                info!("Package metadata retrieved successfully: size={}", len);
+                return Ok(());
             }
         }
     }
 
+    error!("No package metadata found: section_count={}", sections.len());
     Err(Error::new(
         std::io::ErrorKind::Other,
         "No metadata found"))
@@ -676,18 +698,20 @@ pub fn read_debug_link<'a>(
     sections: &Vec<SectionMetadata>,
     section_offsets: &Vec<u64>,
     buf: &'a mut [u8]) -> Result<Option<&'a [u8]>, Error> {
-    
     for section in sections {
         let mut name_buf: [u8; 1024] = [0; 1024];
         if let Ok(name) = read_section_name(reader, section, section_offsets, &mut name_buf) {
             if name == ".gnu_debuglink" {
+                debug!("Found debug link section: offset={:#x}, size={}", section.offset, section.size);
                 reader.seek(SeekFrom::Start(section.offset))?;
                 reader.read(&mut buf[0..section.size as usize])?;
+                info!("Debug link retrieved successfully");
                 return Ok(Some(buf));
             }
         }
     }
 
+    info!("Debug link not found in ELF file");
     Ok(None)
 }
 
@@ -704,8 +728,10 @@ pub fn get_load_header(
         ELFCLASS64 => {
             return get_load_header64(reader);
         },
-        _ => { return Ok(ElfLoadHeader::default()); }
-
+        _ => {
+            warn!("Unknown ELF class for load header: class={}", class);
+            return Ok(ElfLoadHeader::default());
+        }
     }
 }
 
@@ -1186,12 +1212,14 @@ fn get_load_header32(
     }
     let sec_count = header.e_phnum as u32;
     let mut sec_offset = header.e_phoff as u64;
+    debug!("Scanning program headers: count={}, offset={:#x}", sec_count, sec_offset);
     let mut pheader = ElfProgramHeader32::default();
     for _ in 0..sec_count {
         reader.seek(SeekFrom::Start(sec_offset))?;
         get_program_header32(reader, &mut pheader)?;
         if pheader.p_type == PT_LOAD &&
             (pheader.p_flags & PF_X) == PF_X {
+            info!("Load header retrieved successfully: p_offset={:#x}, p_vaddr={:#x}", pheader.p_offset, pheader.p_vaddr);
             return Ok(ElfLoadHeader::new(
                 pheader.p_offset as u64,
                 pheader.p_vaddr as u64));
@@ -1199,6 +1227,7 @@ fn get_load_header32(
         sec_offset += header.e_phentsize as u64;
     }
     /* No program headers, assume absolute */
+    info!("No executable PT_LOAD segment found, using default load header");
     Ok(ElfLoadHeader::default())
 }
 
@@ -1213,19 +1242,22 @@ fn get_load_header64(
     }
     let sec_count = header.e_phnum as u32;
     let mut sec_offset = header.e_phoff as u64;
+    debug!("Scanning program headers: count={}, offset={:#x}", sec_count, sec_offset);
     let mut pheader = ElfProgramHeader64::default();
     for _ in 0..sec_count {
         reader.seek(SeekFrom::Start(sec_offset))?;
         get_program_header64(reader, &mut pheader)?;
         if pheader.p_type == PT_LOAD &&
             (pheader.p_flags & PF_X) == PF_X {
-                return Ok(ElfLoadHeader::new(
-                    pheader.p_offset,
-                    pheader.p_vaddr));
+            info!("Load header retrieved successfully: p_offset={:#x}, p_vaddr={:#x}", pheader.p_offset, pheader.p_vaddr);
+            return Ok(ElfLoadHeader::new(
+                pheader.p_offset,
+                pheader.p_vaddr));
         }
         sec_offset += header.e_phentsize as u64;
     }
     /* No program headers, assume absolute */
+    info!("No executable PT_LOAD segment found, using default load header");
     Ok(ElfLoadHeader::default())
 }
 
