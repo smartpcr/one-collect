@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::dwarf::*;
-use tracing::{debug, trace, error};
+use tracing::{debug, trace, error, warn};
 
 #[derive(Default)]
 struct FrameOffsets {
@@ -27,7 +27,7 @@ impl FrameOffsets {
                     &mut self.frame_offsets);
                 debug!("Frame offsets loaded: count={}", self.frame_offsets.len());
             } else {
-                debug!("Failed to open file for frame offsets: dev={}, ino={}", key.dev(), key.ino());
+                warn!("Failed to open file for frame offsets: dev={}, ino={}", key.dev(), key.ino());
             }
 
             /* Don't attempt any more loads */
@@ -50,7 +50,7 @@ impl FrameOffsets {
                         offset);
                 } else {
                     /* Cannot access file */
-                    debug!("Cannot access file for frame offset parsing");
+                    warn!("Cannot access file for frame offset parsing: dev={}, ino={}", key.dev(), key.ino());
                     offset.mark_invalid();
                 }
             }
@@ -123,7 +123,7 @@ impl Unwinder {
             return None;
         }
 
-        debug!("Starting prolog scan: cfa={:#x}, stack_len={}", cfa, len);
+        trace!("Starting prolog scan: cfa={:#x}, stack_len={}", cfa, len);
 
         /* Limit range to stack size at stack location */
         let max_cfa = cfa + len as u64;
@@ -133,7 +133,7 @@ impl Unwinder {
         let max_offset = len - 8;
 
         if offset > max_offset {
-            trace!("Prolog unwind failed: offset out of range");
+            warn!("Prolog unwind failed: offset out of range");
             return None;
         }
 
@@ -160,7 +160,7 @@ impl Unwinder {
                 /* Check if IP is within a module */
                 if process.find(second).is_some() {
                     /* Assume valid */
-                    debug!("Prolog scan successful: new_rsp={:#x}, next_ip={:#x}, scan_count={}", first, second, count);
+                    trace!("Prolog scan successful: new_rsp={:#x}, next_ip={:#x}, scan_count={}", first, second, count);
                     self.registers[REG_RSP] = first;
                     self.registers[REG_RBP] = first;
 
@@ -176,7 +176,7 @@ impl Unwinder {
             count += 1;
         }
 
-        debug!("Prolog scan exhausted: scan_count={}", count);
+        warn!("Prolog scan exhausted: scan_count={}", count);
         result.error = Some("Anon prolog not found");
 
         None
@@ -189,7 +189,7 @@ impl Unwinder {
         rva: u64,
         stack_data: &[u8],
         result: &mut UnwindResult) -> Option<u64> {
-        debug!("Unwinding module: rva={:#x}, dev={}, ino={}", rva, key.dev(), key.ino());
+        trace!("Unwinding module: rva={:#x}, dev={}, ino={}", rva, key.dev(), key.ino());
         
         /* Lookup offset by RVA */
         if let Some(offset) = self.frame_cache
@@ -215,14 +215,14 @@ impl Unwinder {
 
             /* No return address, unexpected */
             if cfa_data.off_mask & REG_RA_BIT == 0 {
-                debug!("No return address register in frame");
+                warn!("No return address register in frame");
                 result.error = Some("No return address register");
                 return None;
             }
 
             /* Unexpected backwards access */
             if self.registers[REG_RSP] >= cfa {
-                debug!("CFA would go backwards: rsp={:#x}, cfa={:#x}", self.registers[REG_RSP], cfa);
+                warn!("CFA would go backwards: rsp={:#x}, cfa={:#x}", self.registers[REG_RSP], cfa);
                 result.error = Some("CFA would go backwards");
                 return None;
             }
@@ -239,7 +239,7 @@ impl Unwinder {
                         self.registers[REG_RBP] = value;
                     },
                     None => {
-                        debug!("Bad stack RBP read");
+                        warn!("Bad stack RBP read");
                         result.error = Some("Bad stack RBP read");
                         return None;
                     },
@@ -260,7 +260,7 @@ impl Unwinder {
                     return Some(value);
                 },
                 None => {
-                    debug!("Bad stack IP read");
+                    warn!("Bad stack IP read");
                     result.error = Some("Bad stack IP read");
                     return None;
                 }
@@ -312,12 +312,12 @@ impl MachineUnwinder for Unwinder {
         stack_data: &[u8],
         stack_frames: &mut Vec<u64>,
         result: &mut UnwindResult) {
-        debug!("Starting stack unwind loop");
+        trace!("Starting stack unwind loop");
         
         while let Some(module) = process.find(self.rip) {
             let ip = if module.unwind_type() == UnwindType::Prolog {
                 /* Anonymous and PE */
-                debug!("Using prolog unwinder for ip={:#x}", self.rip);
+                trace!("Using prolog unwinder for ip={:#x}", self.rip);
                 self.unwind_prolog(
                     process,
                     stack_data,
@@ -325,7 +325,7 @@ impl MachineUnwinder for Unwinder {
             } else {
                 /* Default to DWARF */
                 let rva = module.rva(self.rip);
-                debug!("Using DWARF unwinder for ip={:#x}, rva={:#x}", self.rip, rva);
+                trace!("Using DWARF unwinder for ip={:#x}, rva={:#x}", self.rip, rva);
 
                 self.unwind_module(
                     &module.key(),

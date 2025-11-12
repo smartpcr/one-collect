@@ -5,7 +5,7 @@ use std::io::{Error, ErrorKind, Read, Seek, SeekFrom};
 use std::fmt;
 
 use crate::elf::*;
-use tracing::{debug, trace, info};
+use tracing::{debug, trace, info, warn};
 
 const VALUE_TYPE_OFFSET: u8 = 0;
 const VALUE_TYPE_REG: u8 = 1;
@@ -370,7 +370,7 @@ impl FrameOffset {
             fde_buf)?;
 
         if fde_len < 8 {
-            debug!("FDE too small: len={}", fde_len);
+            warn!("FDE too small: len={}", fde_len);
             return Err(
                 error("FDE too small"));
         }
@@ -382,7 +382,7 @@ impl FrameOffset {
 
         /* Not valid */
         if cie_offset == 0 {
-            debug!("Invalid CIE offset");
+            warn!("Invalid CIE offset");
             return Err(
                 error("Invalid CIE offset"));
         }

@@ -60,7 +60,13 @@ Focus exclusively on adding tracing statements to the existing source code.
 - Recoverable errors with fallback behavior
 - Missing optional features
 - Unknown data types with default handling
-- **Example**: `warn!("Unknown ELF class: class={}", class);`
+- **Error paths**: When an error is about to be returned (Err) or error state is set (result.error = Some(...))
+- **Examples**: 
+  - `warn!("Unknown ELF class: class={}", class);`
+  - `warn!("FDE too small: len={}", fde_len);` // Before returning Err
+  - `warn!("Invalid CIE offset");` // Before returning Err
+  - `warn!("Cannot access file for frame offset parsing: dev={}, ino={}", key.dev(), key.ino());` // Before marking invalid
+  - `warn!("Prolog scan exhausted: scan_count={}", count);` // Before setting result.error
 
 #### DEBUG Level
 - **Findings**: When data is found or not found (detailed info beyond INFO level)
