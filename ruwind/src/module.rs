@@ -3,6 +3,7 @@
 
 use std::cmp::Ordering;
 use super::*;
+use tracing::debug;
 
 impl ModuleKey {
     pub fn new(
@@ -78,6 +79,10 @@ impl Module {
         dev: u64,
         ino: u64,
         unwind_type: UnwindType) -> Self {
+        debug!(
+            "Module created: start={:#x}, end={:#x}, offset={:#x}, dev={}, ino={}, unwind_type={:?}",
+            start, end, offset, dev, ino, unwind_type
+        );
         Self {
             start,
             end,
@@ -93,6 +98,7 @@ impl Module {
     pub fn new_anon(
         start: u64,
         end: u64) -> Self {
+        debug!("Anonymous module created: start={:#x}, end={:#x}", start, end);
         Self {
             start,
             end,

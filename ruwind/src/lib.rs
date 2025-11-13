@@ -88,7 +88,7 @@ pub trait ModuleAccessor {
         key: &ModuleKey) -> Option<File>;
 }
 
-#[derive(Eq, Clone, Copy, PartialEq)]
+#[derive(Debug, Eq, Clone, Copy, PartialEq)]
 pub enum UnwindType {
     DWARF,
     Prolog,

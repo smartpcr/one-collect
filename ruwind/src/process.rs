@@ -2,6 +2,7 @@
 // Licensed under the MIT license.
 
 use super::*;
+use tracing::{debug, trace};
 
 impl Unwindable for Process {
     fn find<'a>(
@@ -17,11 +18,13 @@ impl Process {
     pub fn add_module(
         &mut self,
         module: Module) {
+        debug!("Module added to process: start={:#x}, end={:#x}", module.start, module.end);
         self.mods.push(module);
         self.sorted = false;
     }
 
     pub fn fork(&self) -> Self {
+        debug!("Process forked: module_count={}", self.mods.len());
         let mut child = Self::new();
 
         for module in &self.mods {
@@ -34,6 +37,7 @@ impl Process {
     pub fn sort(
         &mut self) {
         if !self.sorted {
+            debug!("Sorting process modules: module_count={}", self.mods.len());
             self.mods.sort();
             self.sorted = true;
         }
@@ -43,6 +47,7 @@ impl Process {
         &self,
         ip: u64) -> Option<&dyn CodeSection> {
         if self.mods.is_empty() {
+            trace!("Module lookup failed: ip={:#x}, no modules loaded", ip);
             return None;
         }
 
@@ -55,9 +60,11 @@ impl Process {
 
         if module.start <= ip &&
            module.end >= ip {
+            debug!("Module found for ip={:#x}: start={:#x}, end={:#x}", ip, module.start, module.end);
             return Some(module);
         }
 
+        trace!("Module lookup failed: ip={:#x}, closest_start={:#x}, closest_end={:#x}", ip, module.start, module.end);
         None
     }
 }
