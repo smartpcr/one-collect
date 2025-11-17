@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
+use tracing::{error, info, debug};
+
 use clap::{crate_version, Parser, ValueEnum};
 use std::env;
 use std::fmt;
@@ -81,10 +83,16 @@ impl RecordArgs {
         
         // If --out isn't specified, default to the current working directory.
         let output_path = match command_args.out {
-            Some(path) => { PathBuf::from(path) },
+            Some(path) => { 
+                debug!("Output path specified: path={}", path);
+                PathBuf::from(path) 
+            },
             None => {
                 match env::current_dir() {
-                    Ok(current_dir) => current_dir,
+                    Ok(current_dir) => {
+                        debug!("Using current working directory: path={}", current_dir.display());
+                        current_dir
+                    },
                     Err(e) => panic!("{}", format!("Unable to get current working directory: {}", e))
                 }
             }
@@ -92,12 +100,18 @@ impl RecordArgs {
 
         let script = match command_args.script_file {
             Some(script_file) => {
+                debug!("Loading script from file: path={}", script_file);
                 match std::fs::read_to_string(script_file) {
-                    Ok(script) => { Some(script) },
+                    Ok(script) => { 
+                        debug!("Script loaded successfully");
+                        Some(script) 
+                    },
                     Err(e) => panic!("{}", format!("Unable to read script file: {}", e))
                 }
             },
-            None => { command_args.script },
+            None => { 
+                command_args.script 
+            },
         };
 
         let args = Self {
@@ -116,8 +130,24 @@ impl RecordArgs {
         if !args.on_cpu && !args.off_cpu &&
             !args.soft_page_faults && !args.hard_page_faults &&
             args.script.is_none() {
+            error!("No events or scripts selected");
             eprintln!("No events or scripts selected. Exiting.");
             process::exit(1);
+        }
+
+        info!("Arguments parsed: format={}", args.format);
+        info!("Arguments parsed: on_cpu={}", args.on_cpu);
+        info!("Arguments parsed: off_cpu={}", args.off_cpu);
+        info!("Arguments parsed: soft_page_faults={}", args.soft_page_faults);
+        info!("Arguments parsed: hard_page_faults={}", args.hard_page_faults);
+        info!("Arguments parsed: live={}", args.live);
+        if let Some(ref pids) = args.target_pids {
+            info!("Arguments parsed: target_pids={:?}", pids);
+        }
+        if let Some(ref script) = args.script {
+            info!("Arguments parsed: script start");
+            info!("{}", script);
+            info!("Arguments parsed: script end");
         }
 
         args
