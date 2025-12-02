@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::fs::File;
 use std::fmt::Write;
 use std::io::BufReader;
+use tracing::{debug};
 
 use crate::{ReadOnly, Writable};
 use crate::event::DataFieldRef;
@@ -1278,6 +1279,7 @@ impl OSExportMachine {
                                     let mut debug_link_buf: [u8; 1024] = [0; 1024];
                                     if let Ok(Some(debug_link)) = read_debug_link(&mut reader, &sections, &section_offsets, &mut debug_link_buf) {
                                         let str_val = get_str(debug_link);
+                                        debug!("ELF debug link: link={}", str_val);
                                         elf_metadata.set_debug_link(Some(str_val.to_owned()), &mut machine.strings);
                                     }
                                 }
