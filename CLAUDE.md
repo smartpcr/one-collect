@@ -2,6 +2,34 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Session Context
+
+take a look at Claude.md file, make sure all prompts take context from files under docs folder as well as docs under .claude/agents, and remember to keep prompt history following templates under .claude/prompts
+
+## Documentation Context
+
+For comprehensive understanding of this codebase, consult the following documentation:
+
+### Design Documents (`docs/`)
+- **`docs/one_collect-design.md`** - Core library architecture, event pipeline, export system, platform abstraction
+- **`docs/record-trace-design.md`** - CLI tool design, command-line interface, export coordination
+- **`docs/ruwind-design.md`** - Stack unwinding library, DWARF support, JIT code handling
+
+### Expert Guides (`.claude/agents/`)
+- **`architecture-expert.md`** - System design, component interactions, multi-stage pipeline architecture
+- **`design-patterns-expert.md`** - Core patterns (closures, sharing, interning, builder, field references)
+- **`testing-expert.md`** - Testing strategies, mock patterns, test organization
+- **`usage-guide-expert.md`** - Practical usage patterns, common workflows, performance tips
+
+### Tracing Guidelines
+- **`.github/agents/tracing-expert.md`** - Log level guidelines for the `tracing` crate
+
+### Prompt History (`.claude/prompts/`)
+Track significant sessions and decisions in `.claude/prompts/` following the templates in `README.md`:
+- **`sessions/`** - Individual session logs (format: `YYYY-MM-DD_description.md`)
+- **`patterns/`** - Reusable prompt patterns
+- **`decisions/`** - Major technical decisions
+
 ## Repository Structure
 
 This is a Rust-based framework for collecting event and profiling data on Linux and Windows. The repository contains multiple workspace crates:
