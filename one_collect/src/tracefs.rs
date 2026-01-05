@@ -4,6 +4,7 @@
 use std::io::{Result, Error, BufRead, BufReader, ErrorKind, Write};
 use std::path::PathBuf;
 use std::fs::{File, OpenOptions};
+use tracing::{warn, info};
 
 use crate::event::*;
 use crate::user_events::UserEventsFactory;
@@ -32,6 +33,7 @@ impl TraceFS {
                     if let Some(path) = parts.nth(1) {
                         if let Some(fstype) = parts.next() {
                             if fstype == "tracefs" {
+                                info!("TraceFS found and opened: path={}", path);
                                 return Self::open_at(path);
                             }
                         }
@@ -41,6 +43,7 @@ impl TraceFS {
             }
         }
 
+        warn!("TraceFS not mounted");
         Err(
             Error::new(
                 ErrorKind::Other,
@@ -67,6 +70,7 @@ impl TraceFS {
             root: path.into()
         };
 
+        info!("TraceFS opened at path: path={}", path);
         Ok(tracefs)
     }
 
@@ -278,13 +282,24 @@ impl TraceFS {
         path_buf.push(name);
         path_buf.push("format");
 
-        let format = File::open(path_buf)?;
-        let mut reader = BufReader::new(format);
-
-        Self::event_from_format(
-            system,
-            name,
-            &mut reader)
+        let format = File::open(&path_buf);
+        
+        match format {
+            Ok(file) => {
+                let mut reader = BufReader::new(file);
+                let event = Self::event_from_format(
+                    system,
+                    name,
+                    &mut reader)?;
+                
+                info!("Event found: system={}, name={}", system, name);
+                Ok(event)
+            },
+            Err(e) => {
+                warn!("Event not found: system={}, name={}, error={}", system, name, e);
+                Err(e)
+            }
+        }
     }
 
     /// Runs a command on the dynamic_events tracefs file.
@@ -374,6 +389,7 @@ impl TraceFS {
 
         file.write_all(command.as_bytes())?;
 
+        info!("Uprobe unregistered: system={}, name={}", system, name);
         Ok(())
     }
 

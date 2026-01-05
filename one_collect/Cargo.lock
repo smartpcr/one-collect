@@ -490,6 +490,7 @@ dependencies = [
  "rhai",
  "ruwind",
  "sha1",
+ "tracing",
  "twox-hash",
  "winreg",
 ]
